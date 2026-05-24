@@ -346,11 +346,23 @@ class confGen:
             print("Unknown file format")
             sys.exit(1)
 
-    def _writeConf2File(self, mol, conformerId, file_path):
+    def _writeConf2File(self, mol, conformerId, file_path, **kwargs):
         with rdkit.Chem.SDWriter(file_path) as w:
+            old_props = {
+                key: mol.GetProp(key)
+                for key in kwargs
+                if mol.HasProp(key)
+            }
+            for key, value in kwargs.items():
+                mol.SetProp(key, str(value))
             w.write(mol, conformerId)
             w.flush()
             w.close()
+            for key in kwargs:
+                if key in old_props:
+                    mol.SetProp(key, old_props[key])
+                else:
+                    mol.ClearProp(key)
 
     def _getTorsionPoints(self):
         from rdkit.Chem import TorsionFingerprints
@@ -690,6 +702,7 @@ class confGen:
         # file for saving energies
         file_csv = open("%s/all_confs_sp_energies.csv" %self.WORK_DIR, "w")
         print("FileName,Energy(eV)", file=file_csv)
+        file_csv.flush()
 
         print("Number of generated conformation: %d" %len(conformerIds))
 
@@ -718,7 +731,6 @@ class confGen:
                 if saveConfs:
                     prefix = ""
                     conf_file_path = "%s/conf_%d.sdf"%(CONF_DIR, conformerId)
-                    self._writeConf2File(mol, conformerId, conf_file_path)
 
                 #create ase atoms
                 ase_atoms = self._rwConformer2AseAtoms(mol, conformerId)
@@ -726,6 +738,9 @@ class confGen:
                     e = self._calcEnergyWithMM(mol, conformerId, 100)["energy_abs"]
                 else:
                     e, _ = self._calcSPEnergy(mol, conformerId)
+
+                if saveConfs:
+                    self._writeConf2File(mol, conformerId, conf_file_path, Energy=e)
 
                 if i == 0:
                     minE = e
@@ -737,6 +752,7 @@ class confGen:
                         minEConformerID = conformerId
                         minE_ase_atoms = ase_atoms
                 print("%sconf_%d.sdf,%s"%(prefix, conformerId, e), file=file_csv)
+                file_csv.flush()
 
             minEConformerIDs.append(minEConformerID)
 
@@ -765,6 +781,7 @@ class confGen:
             os.mkdir(PICKED_CONF_DIR)
         picked_file_csv = open(f"{PICKED_CONF_DIR}/{prefix}picked_confs_energies.csv", "w")
         print("FileName,Energy(eV),EnergyPerAtom(eV)", file=picked_file_csv)
+        picked_file_csv.flush()
 
         for i, conformerId  in enumerate(all_picked_confs):
             if optimization_conf:
@@ -785,6 +802,7 @@ class confGen:
                                          e,
                                          e/len(ase_atoms)),
                   file=picked_file_csv)
+            picked_file_csv.flush()
         picked_file_csv.close()
 
         # cluster and prune opitimzed confs by RMSD
@@ -843,7 +861,8 @@ class confGen:
         results["energy_abs"] = ff.CalcEnergy()
         return results
 
-    def setG16Calculator(self, label, chk, nprocs, xc, basis, scf, addsec=None, extra=None):
+    def setG16Calculator(self, label, chk, nprocs, xc, basis, scf, addsec=None,
+                         extra=None, charge=0, mult=1, mem="4GB"):
         from ase.calculators.gaussian import Gaussian
         self.optG16 = True
         self.nequip_cohesive_energy = False
@@ -857,6 +876,9 @@ class confGen:
             scf=scf,
             addsec=addsec,
             extra=extra,
+            charge=charge,
+            mult=mult,
+            mem=mem,
         )
 
     def setANI2XCalculator(self):
