@@ -40,9 +40,9 @@ caculator_type="aimnet2"
 #   Leave calculator_charge blank to infer the SDF formal charge, or set an override.
 # - NequIP: set calculator_model to the deployed .pth path for older NequIP,
 #   or to the compiled model path for newer NequIP.
-#   For the bundled Modeller Lab NequIP models, set caculator_type="nequip",
-#   then set calculator_model="$model_dir/$nequip_model_file" and
-#   nequip_chemical_symbols="identity".
+#   If caculator_type="nequip" and calculator_model is blank, DeepConf uses
+#   the bundled all_NNP_MODELS/G_NequIP.pth model with identity species mapping.
+#   To use another bundled model, set calculator_model="$model_dir/$nequip_model_file".
 model_dir="$ligPrep_DIR/all_NNP_MODELS"
 nequip_model_file="G_NequIP.pth"
 # Other available local examples:
@@ -121,4 +121,3 @@ verbose=yes
 "$calculator_multiplicity" \
 "$calculator_device" \
 "$nequip_chemical_symbols"
-

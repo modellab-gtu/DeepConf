@@ -104,6 +104,52 @@ def _parse_nequip_chemical_symbols(value):
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
+_BUNDLED_NEQUIP_MODELS = {
+    "G_NequIP.pth",
+    "G_NequIP_smdW.pth",
+    "M_NequIP.pth",
+    "M_NequIP_smdO.pth",
+    "M_NequIP_smdW.pth",
+}
+
+
+def _default_nequip_model_path():
+    return os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        "all_NNP_MODELS",
+        "G_NequIP.pth",
+    )
+
+
+def _is_bundled_nequip_model(model_path):
+    return os.path.basename(os.path.abspath(str(model_path))) in _BUNDLED_NEQUIP_MODELS
+
+
+def _resolve_nequip_model_path(value):
+    model_path = _value_or_env(value, "DEEPCONF_NEQUIP_MODEL", "")
+    if model_path is None or str(model_path).strip() == "":
+        model_path = _default_nequip_model_path()
+        if verbose:
+            print(f"Using default bundled NequIP model: {model_path}")
+    else:
+        model_path = os.path.expandvars(os.path.expanduser(str(model_path).strip()))
+
+    if not os.path.exists(model_path):
+        raise FileNotFoundError(f"NequIP model file not found: {model_path}")
+
+    return model_path
+
+
+def _resolve_nequip_chemical_symbols(value, model_path):
+    chemical_symbols = _parse_nequip_chemical_symbols(value)
+    if chemical_symbols is None and _is_bundled_nequip_model(model_path):
+        if verbose:
+            print("Using identity chemical symbol mapping for bundled NequIP model")
+        return True
+
+    return chemical_symbols
+
+
 def _formal_charge_from_ligand(lig):
     mol = getattr(lig, "rw_mol", None)
     if mol is None:
@@ -370,11 +416,14 @@ def runConfGen(file_name):
             mult=calculator_mult,
         )
     elif "nequip" in calculator_type.lower():
-        model_path = _value_or_env(calculator_model, "DEEPCONF_NEQUIP_MODEL", "")
+        model_path = _resolve_nequip_model_path(calculator_model)
         lig.setNequIPCalculator(
             model_path=model_path,
             device=calculator_device,
-            chemical_symbols=_parse_nequip_chemical_symbols(nequip_chemical_symbols),
+            chemical_symbols=_resolve_nequip_chemical_symbols(
+                nequip_chemical_symbols,
+                model_path,
+            ),
         )
     else:
         print(f"Unsupported calculator_type: {calculator_type}")
