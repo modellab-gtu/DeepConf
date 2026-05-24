@@ -843,7 +843,8 @@ class confGen:
         results["energy_abs"] = ff.CalcEnergy()
         return results
 
-    def setG16Calculator(self, label, chk, nprocs, xc, basis, scf, addsec=None, extra=None):
+    def setG16Calculator(self, label, chk, nprocs, xc, basis, scf, addsec=None,
+                         extra=None, charge=0, mult=1):
         from ase.calculators.gaussian import Gaussian
         self.optG16 = True
         self.nequip_cohesive_energy = False
@@ -857,6 +858,8 @@ class confGen:
             scf=scf,
             addsec=addsec,
             extra=extra,
+            charge=charge,
+            mult=mult,
         )
 
     def setANI2XCalculator(self):
