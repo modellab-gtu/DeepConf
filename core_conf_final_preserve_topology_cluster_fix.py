@@ -222,40 +222,6 @@ class confGen:
 
         return self
 
-    def optimizeAddedHydrogensWithMM(self, maxiter=200):
-        """
-        Relax only added hydrogen atoms with the RDKit force-field path used
-        when calculator_type=uff selects mmCalculator=True.
-        """
-
-        if not self.addH:
-            return self
-
-        if getattr(self, "verbose", True):
-            print("Relaxing added hydrogens with fixed heavy atoms using RDKit MM.")
-
-        mol = Chem.RWMol(self.rw_mol)
-        props = AllChem.MMFFGetMoleculeProperties(mol)
-        if props is not None:
-            ff = AllChem.MMFFGetMoleculeForceField(mol, props)
-        else:
-            ff = AllChem.UFFGetMoleculeForceField(mol)
-
-        if ff is None:
-            print(
-                "Warning: RDKit MM force field could not be assigned; "
-                "skipping fixed-heavy-atom H relaxation."
-            )
-            return self
-
-        for atom in mol.GetAtoms():
-            if atom.GetSymbol() != "H":
-                ff.AddFixedPoint(atom.GetIdx())
-
-        ff.Minimize(maxIts=maxiter)
-        self.rw_mol = mol
-        return self
-
     def getFileBase(self):
         return self.mol_path.split("/")[-1].split(".")[0]
 
@@ -890,9 +856,7 @@ class confGen:
                     summary_csv=summary_csv,
                 )
             else:
-                src = f"{PICKED_CONF_DIR}/{confs_energies['FileName'][0]}"
-                dst = f"{PICKED_CONF_DIR}/{self.getFileBase()}_output.sdf"
-                os.rename(src, dst)
+                os.rename(f"{PICKED_CONF_DIR}/{confs_energies['FileName'][0]}", f"{PICKED_CONF_DIR}/{prefix}output.sdf")
 
         else:
             # No geometry optimization of picked conformers was requested.
@@ -1161,3 +1125,5 @@ class confGen:
 
         # write mol to xyz file by ase
         write(file_path, ase_atoms)
+
+

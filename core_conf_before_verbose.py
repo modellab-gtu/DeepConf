@@ -6,7 +6,6 @@ from ase.io import write
 import rdkit
 from  rdkit import Chem
 from  rdkit.Chem import AllChem
-from rdkit.Geometry import Point3D
 #  import os_util
 from collections import defaultdict
 import sys, os, shutil
@@ -53,24 +52,10 @@ def calcRMSDsymm(pair_idx, mol_list):
                                      prealigned=False)
                    )
         else:
-            mol1 = mol_list[idx1]
-            mol2 = mol_list[idx2]
-            try:
-                return Chem.rdMolAlign.GetBestRMS(mol1, mol2)
-            except RuntimeError:
-                # Safety net: if RDKit substructure/symmetry matching fails,
-                # fall back to atom-order alignment. This should be rare after
-                # topology-preserving ASE->RDKit conversion.
-                if mol1.GetNumAtoms() != mol2.GetNumAtoms():
-                    name1 = mol1.GetProp("_Name") if mol1.HasProp("_Name") else str(idx1)
-                    name2 = mol2.GetProp("_Name") if mol2.HasProp("_Name") else str(idx2)
-                    raise RuntimeError(
-                        f"RMSD failed and atom counts differ: {name1} "
-                        f"({mol1.GetNumAtoms()}) vs {name2} ({mol2.GetNumAtoms()})"
-                    )
-
-                atom_map = [(i, i) for i in range(mol1.GetNumAtoms())]
-                return Chem.rdMolAlign.AlignMol(mol2, mol1, atomMap=atom_map)
+            return (Chem.rdMolAlign
+                    .GetBestRMS(mol_list[idx1],
+                                mol_list[idx2])
+                   )
 
 
 #  @calcFuncRunTime
@@ -96,12 +81,6 @@ def getDistMatrix(mol_list, conformerIds=None, nprocs=None, chunk_size=4000):
                                chunksize=chunk_size)
 
     ordered_all_rmsd = [result for result in results if result is not None]
-    expected = n_mol * (n_mol - 1) // 2
-    if len(ordered_all_rmsd) != expected:
-        raise RuntimeError(
-            f"RMSD matrix construction failed: expected {expected} pairwise "
-            f"RMSD values, got {len(ordered_all_rmsd)}."
-        )
     return symmetricize(n_mol, ordered_all_rmsd)
 
 
@@ -140,13 +119,9 @@ class confGen:
 
     """
 
-    def __init__(self, mol_path, addH, WORK_DIR, verbose=True):
+    def __init__(self, mol_path, addH, WORK_DIR):
         self.mol_path = mol_path
         self.WORK_DIR = WORK_DIR
-
-        # Control non-essential logging. Must be defined before _loadRWMol(),
-        # because addH=True can call setANI2XCalculator() during initialization.
-        self.verbose = bool(verbose)
 
         # for activete g16 optmization algorithm
         self.optG16 = False
@@ -168,93 +143,8 @@ class confGen:
         # initialize optimization method
         self.opt_method = None
 
-        # trial number
+        # trial number
         self.n_trial = 1
-
-
-    def setVerbose(self, verbose=True):
-        self.verbose = bool(verbose)
-        return self
-
-    def _optimizer_logfile(self):
-        # ASE default is logfile='-' (stdout). None suppresses optimizer step output.
-        return '-' if getattr(self, "verbose", True) else None
-
-    def optimizeAddedHydrogensWithCurrentCalculator(self, fmax=0.05, maxiter=200, opt_method="LBFGS"):
-        """
-        Relax only added hydrogen atoms using the currently assigned calculator.
-
-        This is called from runConfGen.py after the user-selected calculator
-        has been set. Heavy atoms are fixed, so only H positions relax.
-
-        The original optimization method/fmax/maxiter settings are restored
-        after this short H-only relaxation.
-        """
-
-        if not self.addH:
-            return self
-
-        if self.calculator is None:
-            print(
-                "Warning: add_hydrogen=yes but no calculator is assigned yet; "
-                "skipping fixed-heavy-atom H relaxation."
-            )
-            return self
-
-        old_opt_method = self.opt_method
-        old_fmax = self.fmax
-        old_maxiter = self.maxiter
-
-        if getattr(self, "verbose", True):
-            print(
-                "Relaxing added hydrogens with fixed heavy atoms using the "
-                "user-selected calculator."
-            )
-
-        try:
-            self.setOptMethod(opt_method)
-            self.setOptParams(fmax=fmax, maxiter=maxiter)
-            self.geomOptimization(fix_heavy_atoms=True)
-        finally:
-            self.opt_method = old_opt_method
-            self.fmax = old_fmax
-            self.maxiter = old_maxiter
-
-        return self
-
-    def optimizeAddedHydrogensWithMM(self, maxiter=200):
-        """
-        Relax only added hydrogen atoms with the RDKit force-field path used
-        when calculator_type=uff selects mmCalculator=True.
-        """
-
-        if not self.addH:
-            return self
-
-        if getattr(self, "verbose", True):
-            print("Relaxing added hydrogens with fixed heavy atoms using RDKit MM.")
-
-        mol = Chem.RWMol(self.rw_mol)
-        props = AllChem.MMFFGetMoleculeProperties(mol)
-        if props is not None:
-            ff = AllChem.MMFFGetMoleculeForceField(mol, props)
-        else:
-            ff = AllChem.UFFGetMoleculeForceField(mol)
-
-        if ff is None:
-            print(
-                "Warning: RDKit MM force field could not be assigned; "
-                "skipping fixed-heavy-atom H relaxation."
-            )
-            return self
-
-        for atom in mol.GetAtoms():
-            if atom.GetSymbol() != "H":
-                ff.AddFixedPoint(atom.GetIdx())
-
-        ff.Minimize(maxIts=maxiter)
-        self.rw_mol = mol
-        return self
 
     def getFileBase(self):
         return self.mol_path.split("/")[-1].split(".")[0]
@@ -328,10 +218,12 @@ class confGen:
             self._loadMolWithRW(tmp_file_name, sanitize=False)
             self.rw_mol = self._rdKekuleizeError(self.rw_mol)
 
-        # H-only relaxation is intentionally NOT done here.
-        # At this stage, runConfGen.py has not yet assigned the user-selected
-        # calculator. The added hydrogens will be relaxed later with the same
-        # calculator selected by the user, via optimizeAddedHydrogensWithCurrentCalculator().
+        # optmization for just added H
+        if self.addH:
+            self.setOptMethod(opt_method="LBFGS")
+            self.setOptParams(fmax=0.05, maxiter=200)
+            self.setANI2XCalculator()
+            self.geomOptimization(fix_heavy_atoms=True)
 
     def addHwithRD(self):
         self.rw_mol = rdkit.Chem.rdmolops.AddHs(self.rw_mol, addCoords=True)
@@ -505,81 +397,6 @@ class confGen:
             cluster_conf[key].append(fl_name)
         return cluster_conf
 
-    def _findConformerFileAfterOrganization(self, conf_dir, fl_name, cluster_conf=None):
-        """
-        Return the path to an individual conformer SDF.
-
-        Before cluster organization, files are directly under conf_dir.
-        After organize_mode='move', files are under cluster_*/.
-        """
-        direct_path = f"{conf_dir}/{fl_name}"
-        if os.path.exists(direct_path):
-            return direct_path
-
-        if cluster_conf is not None:
-            for cluster_id, fl_names in cluster_conf.items():
-                if fl_name in fl_names:
-                    cluster_path = f"{conf_dir}/cluster_{cluster_id}/{fl_name}"
-                    if os.path.exists(cluster_path):
-                        return cluster_path
-
-        # Fallback search, robust to future directory naming changes.
-        for root, dirs, files in os.walk(conf_dir):
-            if fl_name in files:
-                return os.path.join(root, fl_name)
-
-        return None
-
-    def _writeEnergyRankedRepresentativeSDF(self, conf_dir, selected_sorted, cluster_conf=None):
-        """
-        Write the final representative SDF sorted by energy.
-
-        This function is intentionally robust to organize_mode='move':
-        if individual conformer SDFs were moved into cluster_* directories,
-        it still locates them and writes <file_base>_output.sdf directly under conf_dir.
-        """
-        output_sdf = f"{conf_dir}/{self.getFileBase()}_output.sdf"
-
-        # Avoid appending to/reading stale files.
-        if os.path.exists(output_sdf):
-            os.remove(output_sdf)
-
-        nwritten = 0
-        with Chem.SDWriter(output_sdf) as w:
-            for rank, (fl_name, e) in enumerate(selected_sorted.items(), start=1):
-                mol_path = self._findConformerFileAfterOrganization(
-                    conf_dir,
-                    fl_name,
-                    cluster_conf=cluster_conf,
-                )
-
-                if mol_path is None:
-                    print(
-                        f"Warning: representative source SDF not found for {fl_name}; "
-                        "skipping in final representative SDF."
-                    )
-                    continue
-
-                mol = next(Chem.SDMolSupplier(mol_path, removeHs=False))
-                if mol is None:
-                    print(f"Warning: could not read representative SDF: {mol_path}")
-                    continue
-
-                mol.SetProp("Energy", str(e))
-                mol.SetProp("_Name", fl_name)
-                mol.SetProp("RepresentativeRankByEnergy", str(rank))
-                mol.SetProp("SourceFile", fl_name)
-                w.write(mol)
-                nwritten += 1
-
-        if nwritten == 0:
-            print(f"Warning: no molecules were written to representative SDF: {output_sdf}")
-        else:
-            print(f"Representative SDF written to: {output_sdf} ({nwritten} structures)")
-
-        return output_sdf
-
-
     def _pruneOptConfs(self, cluster_conf, confs_energies, conf_dir, opt_prune_diffE_thresh,
                        organize_clusters=True, organize_mode="move", summary_csv="cluster_summary.csv"):
         """
@@ -643,14 +460,18 @@ class confGen:
 
         selected_sorted = dict(sorted(selected_after_energy_filter.items(), key=lambda item: item[1]))
 
-        # Write final representative SDF sorted by energy before organization.
-        # It will also be written again after organization, so the final file is
-        # guaranteed to remain directly under opt_picked_confs/.
-        self._writeEnergyRankedRepresentativeSDF(
-            conf_dir,
-            selected_sorted,
-            cluster_conf=cluster_conf,
-        )
+        # Write final representative SDF sorted by energy.
+        output_sdf = f"{conf_dir}/{self.getFileBase()}_output.sdf"
+        with Chem.SDWriter(output_sdf) as w:
+            for rank, (fl_name, e) in enumerate(selected_sorted.items(), start=1):
+                mol_path = f"{conf_dir}/{fl_name}"
+                mol = next(Chem.SDMolSupplier(mol_path, removeHs=False))
+                mol.SetProp("Energy", str(e))
+                mol.SetProp("_Name", fl_name)
+                mol.SetProp("RepresentativeRankByEnergy", str(rank))
+                w.write(mol)
+
+        print(f"Representative SDF written to: {output_sdf}")
 
         # Create energy-ranked cluster directories and optionally move/copy individual SDFs.
         summary_rows = []
@@ -703,15 +524,6 @@ class confGen:
         summary_df.to_csv(summary_csv_path, index=False)
         print(f"Cluster summary written to: {summary_csv_path}")
 
-        # Re-write final representative SDF after cluster organization.
-        # This guarantees the combined SDF exists directly in opt_picked_confs/
-        # even when individual conformer files were moved into cluster_* folders.
-        self._writeEnergyRankedRepresentativeSDF(
-            conf_dir,
-            selected_sorted,
-            cluster_conf=cluster_conf,
-        )
-
     def genGonformers(self, file_path,
                          numConfs=100,
                          ETKDG=False,
@@ -738,12 +550,8 @@ class confGen:
 
         import copy
 
-        if not getattr(self, "verbose", True):
-            from rdkit import RDLogger
-            RDLogger.DisableLog('rdApp.warning')
-
         #  self.addHwithRD()
-        print("Working on conformer generation process")
+        print("Woking on conformer generation process")
         mol = copy.deepcopy(self.rw_mol)
         if numConfs == 0 or numConfs < self._getNumConfs(nfold, scaled=nscale):
             numConfs = self._getNumConfs(nfold, scaled=nscale)
@@ -856,7 +664,7 @@ class confGen:
 
             #  save optimized structure  with rdkit as sdf
             with Chem.rdmolfiles.SDWriter(conf_file_path) as writer:
-                rwmol = self.aseAtoms2rwMol(ase_atoms, template_mol=mol)
+                rwmol = self.aseAtoms2rwMol(ase_atoms)
                 rwmol.SetProp("Energy", str(e))
                 rwmol.SetProp("_Name", f"{prefix}conf_{conformerId}")
                 writer.write(rwmol)
@@ -890,29 +698,7 @@ class confGen:
                     summary_csv=summary_csv,
                 )
             else:
-                src = f"{PICKED_CONF_DIR}/{confs_energies['FileName'][0]}"
-                dst = f"{PICKED_CONF_DIR}/{self.getFileBase()}_output.sdf"
-                os.rename(src, dst)
-
-        else:
-            # No geometry optimization of picked conformers was requested.
-            # Create a final combined SDF anyway, so compact mode has a single final file to export.
-            confs_energies = pd.read_csv(f"{PICKED_CONF_DIR}/{prefix}picked_confs_energies.csv")
-            confs_energies = confs_energies.sort_values("Energy(eV)")
-            output_sdf = f"{PICKED_CONF_DIR}/{self.getFileBase()}_output.sdf"
-            with Chem.SDWriter(output_sdf) as w:
-                for rank, (_, row) in enumerate(confs_energies.iterrows(), start=1):
-                    fl_name = row["FileName"]
-                    e = float(row["Energy(eV)"])
-                    mol_path = f"{PICKED_CONF_DIR}/{fl_name}"
-                    mol = next(Chem.SDMolSupplier(mol_path, removeHs=False))
-                    if mol is None:
-                        continue
-                    mol.SetProp("Energy", str(e))
-                    mol.SetProp("_Name", fl_name)
-                    mol.SetProp("RepresentativeRankByEnergy", str(rank))
-                    w.write(mol)
-            print(f"Representative SDF written to: {output_sdf}")
+                os.rename(f"{PICKED_CONF_DIR}/{confs_energies['FileName'][0]}", f"{PICKED_CONF_DIR}/{prefix}output.sdf")
 
     def _calcEnergyWithMM(self, mol, conformerId, minimizeIts):
         ff = rdkit.Chem.AllChem.MMFFGetMoleculeForceField(
@@ -947,8 +733,7 @@ class confGen:
     def setANI2XCalculator(self):
         import torchani
         import torch
-        if getattr(self, "verbose", True):
-            print("Number of CUDA devices: ", torch.cuda.device_count())
+        print("Nuber of CUDA devices: ", torch.cuda.device_count())
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
         self.calculator = torchani.models.ANI2x().to(device).ase()
@@ -956,8 +741,7 @@ class confGen:
     def setNequIPCalculator(self, model_path):
         import torch
         from nequip.ase import NequIPCalculator
-        if getattr(self, "verbose", True):
-            print("Number of CUDA devices: ", torch.cuda.device_count())
+        print("Nuber of CUDA devices: ", torch.cuda.device_count())
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
         self.calculator = NequIPCalculator.from_deployed_model(
@@ -967,8 +751,7 @@ class confGen:
         import torch
         from aimnet.calculators import AIMNet2ASE
 #        from aimnet2calc import AIMNet2ASE
-        if getattr(self, "verbose", True):
-            print("Number of CUDA devices: ", torch.cuda.device_count())
+        print("Nuber of CUDA devices: ", torch.cuda.device_count())
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
         self.calculator = AIMNet2ASE(
@@ -982,7 +765,7 @@ class confGen:
         ase_atoms = self._rwConformer2AseAtoms(mol, conformerId)
         #  from ase.io import write
         #  write("test_ase_atoms.xyz", ase_atoms)
-        ase_atoms.calc = self.calculator
+        ase_atoms.set_calculator(self.calculator)
 
         return ase_atoms.get_potential_energy(), ase_atoms 
 
@@ -992,7 +775,7 @@ class confGen:
             print("Error: Calculator not found. Please set any calculator")
             sys.exit(1)
         ase_atoms= self.rwMol2AseAtoms()
-        ase_atoms.calc = self.calculator
+        ase_atoms.set_calculator(self.calculator)
         return ase_atoms.get_potential_energy()
 
     def setOptParams(self, fmax, maxiter):
@@ -1005,16 +788,16 @@ class confGen:
     def _getOptMethod(self, ase_atoms):
         if self.opt_method is None or self.opt_method=="lbfgs":
             from ase.optimize import LBFGS
-            return LBFGS(ase_atoms, logfile=self._optimizer_logfile())
+            return LBFGS(ase_atoms)
         elif self.opt_method=="bfgs":
             from ase.optimize import BFGS
-            return BFGS(ase_atoms, logfile=self._optimizer_logfile())
+            return BFGS(ase_atoms)
         elif self.opt_method=="fire":
             from ase.optimize import FIRE
-            return FIRE(ase_atoms, logfile=self._optimizer_logfile())
+            return FIRE(ase_atoms)
         elif self.opt_method=="gpmin":
             from ase.optimize import GPMin
-            return GPMin(ase_atoms, logfile=self._optimizer_logfile())
+            return GPMin(ase_atoms)
         elif self.opt_method=="berny":
             from ase.optimize import Berny
             return Berny(ase_atoms)
@@ -1045,7 +828,7 @@ class confGen:
             dyn =  GaussianOptimizer(ase_atoms, self.calculator)
             dyn.run(steps=self.maxiter)
         else:
-            ase_atoms.calc = self.calculator
+            ase_atoms.set_calculator(self.calculator)
             dyn = self._getOptMethod(ase_atoms)
             dyn.run(fmax=self.fmax, steps=self.maxiter)
 
@@ -1071,12 +854,12 @@ class confGen:
             dyn =  GaussianOptimizer(ase_atoms, self.calculator)
             dyn.run(steps=self.maxiter)
         else:
-            ase_atoms.calc = self.calculator
+            ase_atoms.set_calculator(self.calculator)
             #  self.dyn = LBFGS(ase_atoms)
             dyn = self._getOptMethod(ase_atoms)
             dyn.run(fmax=self.fmax, steps=self.maxiter)
 
-        self.rw_mol = self.aseAtoms2rwMol(ase_atoms, template_mol=self.rw_mol)
+        self.rw_mol = self.aseAtoms2rwMol(ase_atoms)
         return ase_atoms.get_potential_energy()
 
     def _rwConformer2AseAtoms(self, mol, conformerId):
@@ -1109,51 +892,18 @@ class confGen:
                              ))
         return ase_atoms
 
-    def aseAtoms2rwMol(self, ase_atoms, template_mol=None):
-        """
-        Convert ASE atoms back to an RDKit molecule while preserving the
-        original RDKit topology, bond orders, formal charges, and atom order.
+    def aseAtoms2rwMol(self, ase_atoms):
 
-        Previous versions wrote ASE atoms to a temporary PDB and then tried
-        AssignBondOrdersFromTemplate(). For P/S-containing molecules or
-        OpenBabel-added-H cases, this can fail or create inconsistent bond
-        graphs across conformers, which then breaks GetBestRMS clustering.
+        write("tmp.pdb", ase_atoms)
 
-        This version assumes ASE atom order is identical to the template RDKit
-        molecule atom order, which is true for the current DeepConf workflow.
-        """
+        rd_mol = Chem.rdmolfiles.MolFromPDBFile("tmp.pdb", sanitize=True, removeHs=False)
+        self._rmFileExist("tmp.pdb")
 
-        if template_mol is None:
-            template_mol = self.rw_mol
-
-        if template_mol is None:
-            raise ValueError("template_mol is None; cannot preserve RDKit topology.")
-
-        n_atoms_rdkit = template_mol.GetNumAtoms()
-        n_atoms_ase = len(ase_atoms)
-
-        if n_atoms_rdkit != n_atoms_ase:
-            raise ValueError(
-                f"Atom count mismatch while converting ASE->RDKit: "
-                f"template has {n_atoms_rdkit}, ASE has {n_atoms_ase}"
-            )
-
-        # Copy topology/properties from template and replace coordinates.
-        rd_mol = Chem.Mol(template_mol)
-        rd_mol.RemoveAllConformers()
-
-        conf = Chem.Conformer(n_atoms_rdkit)
-        positions = ase_atoms.get_positions()
-
-        for i, pos in enumerate(positions):
-            conf.SetAtomPosition(
-                i,
-                Point3D(float(pos[0]), float(pos[1]), float(pos[2]))
-            )
-
-        rd_mol.AddConformer(conf, assignId=True)
-
-        return Chem.RWMol(rd_mol)
+        try:
+            return AllChem.AssignBondOrdersFromTemplate(self.rw_mol, rd_mol)
+        except:
+            print("Warnings: Can not assign bond borders!")
+            return rd_mol
 
 
     def writeAseAtoms(self, file_path):
@@ -1161,3 +911,5 @@ class confGen:
 
         # write mol to xyz file by ase
         write(file_path, ase_atoms)
+
+

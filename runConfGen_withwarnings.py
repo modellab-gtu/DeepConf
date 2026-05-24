@@ -4,22 +4,12 @@ from rdkit.Chem import rdMolAlign
 import numpy as np
 
 from ase.io import read, write
-
-# Hide the requests/chardet warning when the environment lacks optional charset packages.
-# The better environment-level fix is to install charset-normalizer or chardet.
-import warnings
-warnings.filterwarnings(
-    "ignore",
-    message="Unable to find acceptable character detection dependency.*"
-)
-
 from core_conf import confGen
 import argparse
 import os, sys, shutil
 import multiprocessing
 from itertools import product
 import time
-import traceback
 
 
 nprocs_all = int(multiprocessing.cpu_count())
@@ -65,7 +55,6 @@ parser.add_argument("verbose", nargs="?", default="yes")
 
 def calcFuncRunTime(func):
     import time
-    import traceback
     def wrapper(*args, **kwargs):
         s_time = time.time()
         func(*args, **kwargs)
@@ -147,14 +136,15 @@ def _find_final_sdf(WORK_DIR, file_base, prefix):
     Priority:
     1) DeepConf output SDFs from optimized conformer pruning, usually:
        WORK_DIR/opt_picked_confs/<file_base>_output.sdf
+       or, for a single conformer:
+       WORK_DIR/opt_picked_confs/opt_output.sdf
     2) Any *_output.sdf under WORK_DIR.
     3) Ligand optimization output:
        WORK_DIR/global_<prefix><file_base>.sdf
     4) Pre-optimization-only output:
        WORK_DIR/pre_<prefix><file_base>.sdf
     5) If genconformer=yes but optimization_conf=no and no output SDF exists yet,
-       combine individual picked conformers into:
-       WORK_DIR/picked_confs/<file_base>_output.sdf
+       combine individual picked conformers into WORK_DIR/<file_base>_output.sdf.
     """
     candidates = []
 
@@ -213,7 +203,7 @@ def _find_final_sdf(WORK_DIR, file_base, prefix):
     for subdir_name in ("picked_confs", "opt_picked_confs"):
         sdf_dir = os.path.join(WORK_DIR, subdir_name)
         if os.path.isdir(sdf_dir):
-            combined = os.path.join(sdf_dir, f"{file_base}_output.sdf")
+            combined = os.path.join(WORK_DIR, f"{file_base}_output.sdf")
             made = _write_combined_sdf_from_dir(sdf_dir, combined)
             if made is not None:
                 return made
@@ -263,8 +253,8 @@ def setG16calculator(lig, file_base, label, WORK_DIR):
 
 
 def setGenConformers(lig, out_file_path, mmCalculator):
-    last_exc = None
-    for trial in range(1, 4):
+    trial = lig.n_trial
+    while trial <= 3:
         try:
             lig.genGonformers(
                 file_path=out_file_path,
@@ -284,21 +274,16 @@ def setGenConformers(lig, out_file_path, mmCalculator):
                 organize_clusters=organize_clusters,
                 organize_mode=organize_mode,
                 summary_csv=summary_csv,)
+        except:
+            print(f"Trail {trial} failed, attempting new one... ")
+            lig.increaseTrilNum()
+            trial = lig.n_trial
+            setGenConformers(lig, out_file_path, mmCalculator)
+        finally:
             return lig
-        except Exception as exc:
-            last_exc = exc
-            print(f"Trial {trial} failed during conformer generation/optimization/clustering.")
-            print(f"Error type: {type(exc).__name__}")
-            print(f"Error message: {exc}")
-            traceback.print_exc()
-
-            if hasattr(lig, "increaseTrialNum"):
-                lig.increaseTrialNum()
-            elif hasattr(lig, "increaseTrilNum"):
-                lig.increaseTrilNum()
-
-    print("All 3 attempts failed.")
-    raise last_exc
+    else:
+        print(f"{trial -1} attempts failed, Skipping...")
+        return None
 
 
 #  @calcFuncRunTime
@@ -328,8 +313,7 @@ def runConfGen(file_name):
         prefix += "opt_"
 
     # initialize confGen
-    lig = confGen(mol_path, addH, WORK_DIR, verbose=verbose)
-    lig.setVerbose(verbose)
+    lig = confGen(mol_path, addH, WORK_DIR)
     lig.setOptMethod(optimization_method)
     #  lig.writeRWMol2File("test/test.xyz")
 
@@ -347,19 +331,6 @@ def runConfGen(file_name):
             sys.exit(1)
         else:
             mmCalculator=True
-
-    # If OpenBabel added hydrogens, relax only H atoms using the same
-    # calculator selected above. This avoids the previous unconditional ANI2x
-    # H-only relaxation, which fails for elements outside ANI2x coverage.
-    if addH:
-        if mmCalculator:
-            lig.optimizeAddedHydrogensWithMM(maxiter=200)
-        else:
-            lig.optimizeAddedHydrogensWithCurrentCalculator(
-                fmax=0.05,
-                maxiter=200,
-                opt_method="LBFGS",
-            )
 
     # set optimizetion parameters
     lig.setOptParams(fmax=thr_fmax, maxiter=args.maxiter)
@@ -430,10 +401,6 @@ if __name__ == "__main__":
     summary_csv = args.summary_csv
     verbose = getBoolStr(args.verbose)
 
-    if not verbose:
-        from rdkit import RDLogger
-        RDLogger.DisableLog('rdApp.warning')
-
     file_names = [item for item in os.listdir(structure_dir) if not item.startswith(".")]
     failed_csv = open("failed_files.csv", "w")
     failed_csv.write("FileNames,\n")
@@ -455,3 +422,4 @@ if __name__ == "__main__":
         #  break
     fl_timing.close()
     failed_csv.close()
+

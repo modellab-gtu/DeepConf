@@ -65,7 +65,7 @@ parser.add_argument("verbose", nargs="?", default="yes")
 
 def calcFuncRunTime(func):
     import time
-    import traceback
+import traceback
     def wrapper(*args, **kwargs):
         s_time = time.time()
         func(*args, **kwargs)
@@ -147,14 +147,15 @@ def _find_final_sdf(WORK_DIR, file_base, prefix):
     Priority:
     1) DeepConf output SDFs from optimized conformer pruning, usually:
        WORK_DIR/opt_picked_confs/<file_base>_output.sdf
+       or, for a single conformer:
+       WORK_DIR/opt_picked_confs/opt_output.sdf
     2) Any *_output.sdf under WORK_DIR.
     3) Ligand optimization output:
        WORK_DIR/global_<prefix><file_base>.sdf
     4) Pre-optimization-only output:
        WORK_DIR/pre_<prefix><file_base>.sdf
     5) If genconformer=yes but optimization_conf=no and no output SDF exists yet,
-       combine individual picked conformers into:
-       WORK_DIR/picked_confs/<file_base>_output.sdf
+       combine individual picked conformers into WORK_DIR/<file_base>_output.sdf.
     """
     candidates = []
 
@@ -213,7 +214,7 @@ def _find_final_sdf(WORK_DIR, file_base, prefix):
     for subdir_name in ("picked_confs", "opt_picked_confs"):
         sdf_dir = os.path.join(WORK_DIR, subdir_name)
         if os.path.isdir(sdf_dir):
-            combined = os.path.join(sdf_dir, f"{file_base}_output.sdf")
+            combined = os.path.join(WORK_DIR, f"{file_base}_output.sdf")
             made = _write_combined_sdf_from_dir(sdf_dir, combined)
             if made is not None:
                 return made
@@ -263,7 +264,6 @@ def setG16calculator(lig, file_base, label, WORK_DIR):
 
 
 def setGenConformers(lig, out_file_path, mmCalculator):
-    last_exc = None
     for trial in range(1, 4):
         try:
             lig.genGonformers(
@@ -286,7 +286,6 @@ def setGenConformers(lig, out_file_path, mmCalculator):
                 summary_csv=summary_csv,)
             return lig
         except Exception as exc:
-            last_exc = exc
             print(f"Trial {trial} failed during conformer generation/optimization/clustering.")
             print(f"Error type: {type(exc).__name__}")
             print(f"Error message: {exc}")
@@ -297,8 +296,8 @@ def setGenConformers(lig, out_file_path, mmCalculator):
             elif hasattr(lig, "increaseTrilNum"):
                 lig.increaseTrilNum()
 
-    print("All 3 attempts failed.")
-    raise last_exc
+    print("All 3 attempts failed. Skipping this molecule.")
+    return None
 
 
 #  @calcFuncRunTime
@@ -352,14 +351,11 @@ def runConfGen(file_name):
     # calculator selected above. This avoids the previous unconditional ANI2x
     # H-only relaxation, which fails for elements outside ANI2x coverage.
     if addH:
-        if mmCalculator:
-            lig.optimizeAddedHydrogensWithMM(maxiter=200)
-        else:
-            lig.optimizeAddedHydrogensWithCurrentCalculator(
-                fmax=0.05,
-                maxiter=200,
-                opt_method="LBFGS",
-            )
+        lig.optimizeAddedHydrogensWithCurrentCalculator(
+            fmax=0.05,
+            maxiter=200,
+            opt_method="LBFGS",
+        )
 
     # set optimizetion parameters
     lig.setOptParams(fmax=thr_fmax, maxiter=args.maxiter)
@@ -455,3 +451,4 @@ if __name__ == "__main__":
         #  break
     fl_timing.close()
     failed_csv.close()
+
