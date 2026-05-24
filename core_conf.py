@@ -649,7 +649,7 @@ class confGen:
             RDLogger.DisableLog('rdApp.warning')
 
         #  self.addHwithRD()
-        print("Woking on conformer generation process")
+        print("Working on conformer generation process")
         mol = copy.deepcopy(self.rw_mol)
         if numConfs == 0 or numConfs < self._getNumConfs(nfold, scaled=nscale):
             numConfs = self._getNumConfs(nfold, scaled=nscale)
@@ -770,7 +770,7 @@ class confGen:
             print("%sconf_%d.sdf,%s,%s"%(prefix,
                                          conformerId,
                                          e,
-                                         e/ase_atoms.get_number_of_atoms()),
+                                         e/len(ase_atoms)),
                   file=picked_file_csv)
         picked_file_csv.close()
 
@@ -935,7 +935,7 @@ class confGen:
         ase_atoms = self._rwConformer2AseAtoms(mol, conformerId)
         #  from ase.io import write
         #  write("test_ase_atoms.xyz", ase_atoms)
-        ase_atoms.set_calculator(self.calculator)
+        ase_atoms.calc = self.calculator
 
         return ase_atoms.get_potential_energy(), ase_atoms 
 
@@ -945,7 +945,7 @@ class confGen:
             print("Error: Calculator not found. Please set any calculator")
             sys.exit(1)
         ase_atoms= self.rwMol2AseAtoms()
-        ase_atoms.set_calculator(self.calculator)
+        ase_atoms.calc = self.calculator
         return ase_atoms.get_potential_energy()
 
     def setOptParams(self, fmax, maxiter):
@@ -998,7 +998,7 @@ class confGen:
             dyn =  GaussianOptimizer(ase_atoms, self.calculator)
             dyn.run(steps=self.maxiter)
         else:
-            ase_atoms.set_calculator(self.calculator)
+            ase_atoms.calc = self.calculator
             dyn = self._getOptMethod(ase_atoms)
             dyn.run(fmax=self.fmax, steps=self.maxiter)
 
@@ -1024,7 +1024,7 @@ class confGen:
             dyn =  GaussianOptimizer(ase_atoms, self.calculator)
             dyn.run(steps=self.maxiter)
         else:
-            ase_atoms.set_calculator(self.calculator)
+            ase_atoms.calc = self.calculator
             #  self.dyn = LBFGS(ase_atoms)
             dyn = self._getOptMethod(ase_atoms)
             dyn.run(fmax=self.fmax, steps=self.maxiter)
