@@ -154,7 +154,7 @@ Calculator notes:
 
 - ANI-family choices use TorchANI: `ani1x`, `ani1ccx`, or `ani2x`.
 - AIMNet2 uses the AIMNet ASE calculator. Charge is inferred from formal charges in the SDF unless `calculator_charge` or `DEEPCONF_AIMNET_CHARGE` is set.
-- NequIP uses the ASE `NequIPCalculator`. Older `.pth` or `.pt` models are loaded through the deployed-model path.
+- NequIP uses the ASE `NequIPCalculator`. Older `.pth` or `.pt` models are loaded through the deployed-model path. Raw NequIP cohesive energies are converted back to total eV energies before writing SDF/CSV `Energy` values.
 - `g16` uses Gaussian16 through ASE and uses `nprocs` for `nprocshared`.
 - `uff` is only for RDKit/MM energy handling in supported paths. Do not use `uff` with `optimization_conf=yes`.
 

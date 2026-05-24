@@ -28,6 +28,18 @@ NPROCS_ALL = int(cpu_count())
 print("Number of total cpu core: ", NPROCS_ALL)
 
 
+NEQUIP_ATOMIC_SELF_ENERGIES_EV = {
+    "C": -1029.68639155054,
+    "H": -13.6819685328354,
+    "O": -2042.60847516334,
+    "N": -1485.28074187715,
+    "F": -2713.859759887,
+    "S": -10833.1069601335,
+    "P": -9286.00643051839,
+    "Cl": -12521.2432312104,
+}
+
+
 def calcFuncRunTime(func):
     import time
 
@@ -150,6 +162,7 @@ class confGen:
 
         # initialize calcultor
         self.calculator = None
+        self.nequip_cohesive_energy = False
 
         # initialize RW mol
         self.rw_mol = None
@@ -833,6 +846,7 @@ class confGen:
     def setG16Calculator(self, label, chk, nprocs, xc, basis, scf, addsec=None, extra=None):
         from ase.calculators.gaussian import Gaussian
         self.optG16 = True
+        self.nequip_cohesive_energy = False
 
         self.calculator = Gaussian(
             label=label,
@@ -851,6 +865,7 @@ class confGen:
     def setANICalculator(self, model_name="ani2x"):
         import torchani
         import torch
+        self.nequip_cohesive_energy = False
         if getattr(self, "verbose", True):
             print("Number of CUDA devices: ", torch.cuda.device_count())
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -867,6 +882,7 @@ class confGen:
         self.calculator = model_factories[model_key]().to(device).ase()
 
     def setAIMNet2Calculator(self, model_name="aimnet2", charge=0, mult=1):
+        self.nequip_cohesive_energy = False
         try:
             from aimnet.calculators import AIMNet2ASE
         except ImportError:
@@ -925,6 +941,33 @@ class confGen:
                 kwargs["species_to_type_name"] = chemical_symbols
 
         self.calculator = method(**kwargs)
+        self.nequip_cohesive_energy = True
+        if getattr(self, "verbose", True):
+            print("NequIP energies will be written as total energies after adding atomic self energies.")
+
+    def _nequip_atomic_self_energy(self, ase_atoms):
+        total_self_energy = 0.0
+        missing_symbols = []
+        for atom in ase_atoms:
+            try:
+                total_self_energy += NEQUIP_ATOMIC_SELF_ENERGIES_EV[atom.symbol]
+            except KeyError:
+                missing_symbols.append(atom.symbol)
+
+        if missing_symbols:
+            missing = ", ".join(sorted(set(missing_symbols)))
+            raise ValueError(
+                "Missing NequIP atomic self-energy reference for element(s): "
+                f"{missing}"
+            )
+
+        return total_self_energy
+
+    def _reportedCalculatorEnergy(self, ase_atoms, calculator_energy):
+        if getattr(self, "nequip_cohesive_energy", False):
+            return float(calculator_energy) + self._nequip_atomic_self_energy(ase_atoms)
+
+        return calculator_energy
 
     def _calcSPEnergy(self, mol, conformerId):
 
@@ -937,7 +980,8 @@ class confGen:
         #  write("test_ase_atoms.xyz", ase_atoms)
         ase_atoms.calc = self.calculator
 
-        return ase_atoms.get_potential_energy(), ase_atoms 
+        e = self._reportedCalculatorEnergy(ase_atoms, ase_atoms.get_potential_energy())
+        return e, ase_atoms
 
     def calcSPEnergy(self):
 
@@ -946,7 +990,7 @@ class confGen:
             sys.exit(1)
         ase_atoms= self.rwMol2AseAtoms()
         ase_atoms.calc = self.calculator
-        return ase_atoms.get_potential_energy()
+        return self._reportedCalculatorEnergy(ase_atoms, ase_atoms.get_potential_energy())
 
     def setOptParams(self, fmax, maxiter):
         self.maxiter = maxiter
@@ -1002,7 +1046,8 @@ class confGen:
             dyn = self._getOptMethod(ase_atoms)
             dyn.run(fmax=self.fmax, steps=self.maxiter)
 
-        return ase_atoms.get_potential_energy(), ase_atoms
+        e = self._reportedCalculatorEnergy(ase_atoms, ase_atoms.get_potential_energy())
+        return e, ase_atoms
 
     def geomOptimization(self, fix_heavy_atoms=False):
         from ase.calculators.gaussian import GaussianOptimizer
@@ -1030,7 +1075,7 @@ class confGen:
             dyn.run(fmax=self.fmax, steps=self.maxiter)
 
         self.rw_mol = self.aseAtoms2rwMol(ase_atoms, template_mol=self.rw_mol)
-        return ase_atoms.get_potential_energy()
+        return self._reportedCalculatorEnergy(ase_atoms, ase_atoms.get_potential_energy())
 
     def _rwConformer2AseAtoms(self, mol, conformerId):
 
