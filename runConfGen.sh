@@ -1,30 +1,30 @@
 #! /usr/bin/env bash
 
-ligPrep_DIR="$HOME/Desktop/DeepConf"
-PYTHON_DIR="$HOME/miniconda3/bin"
+ligPrep_DIR="$HOME/DeepConf"
+PYTHON_DIR="$HOME/.local/Miniconda3/envs/ANI_AIMNet_NeQuIP/bin"
 
 # Set this to your ligand/input directory.
-struct_dir="./test_akocak"
+struct_dir="./test"
 
 # adding hydrogen if missing (yes/no) if yes, constrain heavy atoms and minimize hydrogens.
 add_hydrogen=no
 
 # set optimization method available in ASE (BFGS, LBFGS, GPMin, FIRE, Berny)
-optimization_method=BFGS
+optimization_method=FIRE
 
 # optimize ligand before conformer generation (yes/no)
-pre_optimization_lig=yes
+pre_optimization_lig=no
 
 # generate conformers (yes/no)
 genconformer=yes
 
 # conformer generator parameters. If ETKDG=yes, max_attempts and prune_rms_thresh are not used.
 ETKDG=yes
-num_conformers=1000
+num_conformers=50
 max_attempts=100000
 
 # RMSD threshold for initial RDKit conformer pruning.
-prune_rms_thresh=0.0005
+prune_rms_thresh=0.05
 
 # RMSD threshold for post-optimization conformer clustering.
 opt_prune_rms_thresh=0.5
@@ -33,7 +33,7 @@ opt_prune_rms_thresh=0.5
 opt_prune_diffE_thresh=0.01
 
 # calculator type (ani1x/ani1ccx/ani2x/aimnet2/nequip/g16/uff)
-caculator_type="ani2x"
+caculator_type="aimnet2"
 
 # Optional calculator settings:
 # - AIMNet2: set calculator_model to aimnet2, aimnet2-2025, etc.
@@ -63,10 +63,10 @@ optimization_conf=yes
 optimization_lig=no
 
 # number of processors for Gaussian and RMSD clustering defaults
-nprocs=1
+nprocs=64
 
 # optimization force threshold
-thr_fmax=0.002
+thr_fmax=0.2
 
 # maximum optimization iterations
 maxiter=50000
@@ -77,7 +77,7 @@ npick=0
 nscale=10
 
 # optimized-conformer RMSD clustering controls
-cluster_nprocs=1
+cluster_nprocs=64
 cluster_chunk_size=4000
 cluster_linkage=complete
 organize_clusters=yes
