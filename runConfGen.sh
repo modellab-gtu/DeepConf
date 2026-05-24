@@ -18,6 +18,10 @@ pre_optimization_lig=no
 # generate conformers (yes/no)
 genconformer=yes
 
+# use external MD trajectory frames instead of RDKit conformer generation (yes/no)
+sample_md=no
+external_md_traj_file=""
+
 # conformer generator parameters. If ETKDG=yes, max_attempts and prune_rms_thresh are not used.
 ETKDG=yes
 num_conformers=50
@@ -128,4 +132,6 @@ verbose=yes
 "$nequip_chemical_symbols" \
 "$g16_mem" \
 "$g16_level" \
-"$g16_basis"
+"$g16_basis" \
+"$sample_md" \
+"$external_md_traj_file"

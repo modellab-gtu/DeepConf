@@ -384,6 +384,11 @@ class confGen:
     def _getClusterKmeansFromConfIds(self, conformerIds, dist_matrix, n_group):
 
         cluster_conf_id = defaultdict(list)
+        n_group = min(int(n_group), len(conformerIds))
+        if n_group <= 1:
+            cluster_conf_id[0] = list(conformerIds)
+            return cluster_conf_id
+
         whitened = whiten(dist_matrix)
         centroids, _ = kmeans(whitened, n_group)
         cluster, _ = vq(whitened,centroids)
@@ -391,6 +396,75 @@ class confGen:
             cluster_conf_id[key].append(value)
 
         return cluster_conf_id
+
+    def _addConformerFromPositions(self, mol, positions):
+        n_atoms = mol.GetNumAtoms()
+        if len(positions) != n_atoms:
+            raise ValueError(
+                f"External trajectory frame atom count mismatch: "
+                f"template has {n_atoms}, frame has {len(positions)}"
+            )
+
+        conf = Chem.Conformer(n_atoms)
+        for i, pos in enumerate(positions):
+            conf.SetAtomPosition(
+                i,
+                Point3D(float(pos[0]), float(pos[1]), float(pos[2]))
+            )
+
+        return mol.AddConformer(conf, assignId=True)
+
+    def _molWithExternalTrajectoryConformers(self, traj_file):
+        traj_file = os.path.expandvars(os.path.expanduser(str(traj_file)))
+        if not os.path.exists(traj_file):
+            raise FileNotFoundError(f"External MD trajectory file not found: {traj_file}")
+
+        mol = Chem.Mol(self.rw_mol)
+        mol.RemoveAllConformers()
+        conformerIds = []
+        ext = os.path.splitext(traj_file)[1].lower()
+        template_symbols = [atom.GetSymbol() for atom in mol.GetAtoms()]
+
+        if ext in (".sdf", ".sd"):
+            supplier = Chem.SDMolSupplier(traj_file, removeHs=False)
+            for frame_id, frame_mol in enumerate(supplier):
+                if frame_mol is None:
+                    print(f"Warning: skipping unreadable SDF frame {frame_id} in {traj_file}")
+                    continue
+                if frame_mol.GetNumConformers() == 0:
+                    print(f"Warning: skipping SDF frame {frame_id} with no coordinates")
+                    continue
+                frame_symbols = [atom.GetSymbol() for atom in frame_mol.GetAtoms()]
+                if frame_symbols != template_symbols:
+                    raise ValueError(
+                        f"External SDF frame {frame_id} atom symbols/order do not "
+                        "match the input molecule topology."
+                    )
+                positions = frame_mol.GetConformer().GetPositions()
+                conformerIds.append(self._addConformerFromPositions(mol, positions))
+        else:
+            from ase.io import read as ase_read
+
+            frames = ase_read(traj_file, index=":")
+            if not isinstance(frames, list):
+                frames = [frames]
+
+            for frame_id, atoms in enumerate(frames):
+                frame_symbols = list(atoms.get_chemical_symbols())
+                if frame_symbols != template_symbols:
+                    raise ValueError(
+                        f"External trajectory frame {frame_id} atom symbols/order do not "
+                        "match the input molecule topology."
+                    )
+                conformerIds.append(
+                    self._addConformerFromPositions(mol, atoms.get_positions())
+                )
+
+        if len(conformerIds) == 0:
+            raise ValueError(f"No usable frames found in external MD trajectory: {traj_file}")
+
+        print(f"Loaded {len(conformerIds)} external MD trajectory frames from {traj_file}")
+        return mol, conformerIds
 
     def _readSDFEnergy(self, file_path, default=np.inf):
         try:
@@ -665,6 +739,8 @@ class confGen:
                          organize_clusters=True,
                          organize_mode="move",
                          summary_csv="cluster_summary.csv",
+                         sample_md=False,
+                         external_md_traj_file="",
                         ):
 
         import copy
@@ -676,11 +752,18 @@ class confGen:
         #  self.addHwithRD()
         print("Working on conformer generation process")
         mol = copy.deepcopy(self.rw_mol)
-        if numConfs == 0 or numConfs < self._getNumConfs(nfold, scaled=nscale):
+        if sample_md:
+            print("Using external MD trajectory frames instead of RDKit conformer generation")
+            mol, conformerIds = self._molWithExternalTrajectoryConformers(
+                external_md_traj_file
+            )
+        elif numConfs == 0 or numConfs < self._getNumConfs(nfold, scaled=nscale):
             numConfs = self._getNumConfs(nfold, scaled=nscale)
             print(f"Maximum number of conformers setting to {numConfs}")
 
-        if ETKDG:
+        if sample_md:
+            pass
+        elif ETKDG:
             ps = rdkit.Chem.rdDistGeom.ETKDGv3()
             conformerIds = list(rdkit.Chem.rdDistGeom.EmbedMultipleConfs(
                 mol,
@@ -712,8 +795,9 @@ class confGen:
         dist_matrix = getDistMatrix([mol], conformerIds)
 
         print("Processing k-means clustering")
+        n_group = min(self._getNumConfs(nfold, scaled=1), len(conformerIds))
         cluster_conf_id = self._getClusterKmeansFromConfIds(conformerIds, dist_matrix,
-                                           n_group=self._getNumConfs(nfold, scaled=1)
+                                           n_group=n_group
                                           )
         print("Calculating SP energies")
         minEConformerIDs = []
@@ -757,11 +841,12 @@ class confGen:
             minEConformerIDs.append(minEConformerID)
 
             # to pick conformer randomly
-            picked = False
-            while picked is False:
-                rndConformerIDs = sample(clustered_confIds, npick)
-                if minEConformerID not in rndConformerIDs:
-                    picked = True
+            n_random_pick = min(npick, max(0, len(clustered_confIds) - 1))
+            random_pool = [
+                conf_id for conf_id in clustered_confIds
+                if conf_id != minEConformerID
+            ]
+            rndConformerIDs = sample(random_pool, n_random_pick)
 
             picked_confs = [minEConformerID] + rndConformerIDs
             all_picked_confs += picked_confs
