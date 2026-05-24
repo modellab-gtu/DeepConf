@@ -107,41 +107,136 @@ bash runConfGen.sh
 
 ## Main Options In `runConfGen.sh`
 
-| Option | Description |
+`runConfGen.sh` is the recommended user-facing entry point. It passes values positionally to `runConfGen.py`, so keep the order at the bottom of the script unchanged when editing.
+
+### Paths And Input
+
+| Option | Current default | Description |
+| --- | --- | --- |
+| `ligPrep_DIR` | `$HOME/DeepConf` | Absolute path to the DeepConf repository. The script runs `$ligPrep_DIR/runConfGen.py` and uses `$ligPrep_DIR/all_NNP_MODELS` for bundled NequIP models. |
+| `PYTHON_DIR` | `$HOME/.local/Miniconda3/envs/ANI_AIMNet_NeQuIP/bin` | Directory containing the Python executable for the DeepConf environment. The script runs `$PYTHON_DIR/python`. |
+| `struct_dir` | `./test` | Directory containing input ligand files. Each file in this folder is processed. Hidden files are ignored. |
+| `verbose` | `yes` | `yes` keeps all folders and intermediate files. `no` copies the final SDF to the run directory as `<file_base>_output.sdf` and removes each ligand work folder. |
+
+### Workflow Switches
+
+| Option | Current default | Description |
+| --- | --- | --- |
+| `add_hydrogen` | `no` | `yes` uses Open Babel to add missing hydrogens. Added H atoms are then relaxed with heavy atoms fixed using the selected calculator. |
+| `pre_optimization_lig` | `no` | `yes` optimizes the input ligand before conformer generation. Use this for a pre-relaxed starting geometry. |
+| `genconformer` | `yes` | `yes` generates conformers with RDKit. `no` skips conformer generation. |
+| `optimization_conf` | `yes` | `yes` optimizes the picked/generated conformers with the selected calculator. |
+| `optimization_lig` | `no` | `yes` optimizes only the original ligand when `genconformer=no`. |
+
+Common workflows:
+
+| Goal | Settings |
 | --- | --- |
-| `struct_dir` | Directory containing input ligand files. |
-| `add_hydrogen` | `yes` uses Open Babel to add missing hydrogens. Added H atoms are relaxed with heavy atoms fixed using the selected calculator. |
-| `caculator_type` | Calculator choice. Supported values include `ani1x`, `ani1ccx`, `ani2x`, `aimnet2`, `nequip`, `g16`, and `uff`. |
-| `calculator_model` | Optional calculator model setting. For AIMNet2, use a model name such as `aimnet2`. For NequIP, use the deployed `.pth` model path for older NequIP environments or the compiled model path for newer ones. |
-| `calculator_charge` | Total molecular charge used by AIMNet2. Leave blank to infer the formal charge from the loaded molecule, or set an explicit override. |
-| `calculator_multiplicity` | Spin multiplicity used by AIMNet2. |
-| `calculator_device` | Device used by NequIP, for example `auto`, `cpu`, or `cuda`. |
-| `nequip_chemical_symbols` | Optional NequIP species mapping. Use `identity`, a comma-separated symbol list, or a JSON mapping string when required by the model. |
-| `optimization_method` | ASE optimizer, for example `BFGS`, `LBFGS`, `FIRE`, `GPMin`, or `Berny`. |
-| `pre_optimization_lig` | Optimize the input ligand before conformer generation. |
-| `genconformer` | Generate conformers with RDKit. |
-| `optimization_conf` | Optimize picked conformers after conformer generation. |
-| `optimization_lig` | Optimize only the original ligand when conformer generation is off. |
-| `ETKDG` | Use RDKit ETKDG conformer embedding. |
-| `num_conformers` | Requested number of RDKit conformers. |
-| `max_attempts` | Maximum RDKit embedding attempts. |
-| `prune_rms_thresh` | Initial RDKit conformer pruning RMSD threshold. |
-| `opt_prune_rms_thresh` | RMSD threshold for clustering optimized conformers. |
-| `opt_prune_diffE_thresh` | Energy threshold for pruning cluster representatives. |
-| `nfold` | Conformer-generation scaling based on torsion count. |
-| `npick` | Number of random conformers picked from each initial cluster in addition to the minimum-energy conformer. |
-| `nscale` | Scaling factor for the number of generated conformers. |
-| `cluster_nprocs` | Number of processes used for post-optimization RMSD clustering. |
-| `cluster_chunk_size` | Multiprocessing chunk size for RMSD calculation. |
-| `cluster_linkage` | Linkage method for RMSD clustering. Default is `complete`. |
-| `organize_clusters` | `yes` creates `cluster_1`, `cluster_2`, ... directories. |
-| `organize_mode` | `move` or `copy` conformer SDF files into cluster directories. |
-| `summary_csv` | Name of the cluster summary CSV written under `opt_picked_confs/`. |
-| `verbose` | `yes` keeps all folders and intermediates. `no` exports only the final SDF and removes each ligand work folder. |
+| Ligand-only geometry optimization | `genconformer=no`, `optimization_lig=yes`, `optimization_conf=no`, `pre_optimization_lig=no` |
+| Conformer generation without pre-optimization | `genconformer=yes`, `pre_optimization_lig=no` |
+| Pre-optimization plus conformer generation | `genconformer=yes`, `pre_optimization_lig=yes` |
+| Generate conformers but do not optimize picked conformers | `genconformer=yes`, `optimization_conf=no` |
+| Generate and optimize picked conformers | `genconformer=yes`, `optimization_conf=yes` |
 
-The positional command-line interface is backward-compatible: the new clustering and `verbose` options are trailing arguments.
+### Calculator Settings
 
-Calculator-specific options are also trailing arguments, so older command lines still work. NequIP model settings can alternatively be supplied with environment variables:
+| Option | Current default | Description |
+| --- | --- | --- |
+| `caculator_type` | `aimnet2` | Calculator choice. The variable name is intentionally kept as `caculator_type` for backward compatibility. Supported values include `ani1x`, `ani1ccx`, `ani2x`, `aimnet2`, `nequip`, `g16`, and `uff`. |
+| `calculator_model` | blank | Optional model name or model path. For AIMNet2, leave blank to use `aimnet2` or set a specific AIMNet model name. For NequIP, set this to a deployed `.pth` model path or a newer compiled model path. |
+| `calculator_charge` | blank | AIMNet2 total molecular charge. Leave blank to infer the formal charge from the loaded SDF/RDKit molecule. Set an integer such as `-1`, `0`, or `1` to override. |
+| `calculator_multiplicity` | `1` | AIMNet2 spin multiplicity. |
+| `calculator_device` | `auto` | Device for NequIP. `auto` selects CUDA when PyTorch sees a GPU, otherwise CPU. You can force `cpu` or `cuda`. |
+| `nequip_chemical_symbols` | blank | Optional NequIP species mapping. Use `identity` for models whose atom-type names match chemical symbols, or provide a comma-separated list/JSON mapping if required by the model. |
+| `nprocs` | `64` | Number of processors for Gaussian jobs. It does not make ANI, AIMNet2, or NequIP single-structure optimization run on 64 CPU cores. Use GPU testing for ML-calculator speed evaluation. |
+
+Calculator notes:
+
+- ANI-family choices use TorchANI: `ani1x`, `ani1ccx`, or `ani2x`.
+- AIMNet2 uses the AIMNet ASE calculator. Charge is inferred from formal charges in the SDF unless `calculator_charge` or `DEEPCONF_AIMNET_CHARGE` is set.
+- NequIP uses the ASE `NequIPCalculator`. Older `.pth` or `.pt` models are loaded through the deployed-model path.
+- `g16` uses Gaussian16 through ASE and uses `nprocs` for `nprocshared`.
+- `uff` is only for RDKit/MM energy handling in supported paths. Do not use `uff` with `optimization_conf=yes`.
+
+### Bundled NequIP Models
+
+The repository includes in-house NequIP model files under:
+
+```bash
+all_NNP_MODELS/
+```
+
+`runConfGen.sh` defines:
+
+```bash
+model_dir="$ligPrep_DIR/all_NNP_MODELS"
+nequip_model_file="G_NequIP.pth"
+```
+
+Bundled model files:
+
+| File | Description |
+| --- | --- |
+| `G_NequIP.pth` | Default bundled NequIP model used by the run script template. |
+| `G_NequIP_smdW.pth` | Bundled NequIP model variant. |
+| `M_NequIP.pth` | Bundled NequIP model variant. |
+| `M_NequIP_smdO.pth` | Bundled NequIP model variant. |
+| `M_NequIP_smdW.pth` | Bundled NequIP model variant. |
+
+To use the default bundled NequIP model, edit `runConfGen.sh` like this:
+
+```bash
+caculator_type="nequip"
+calculator_model="$model_dir/$nequip_model_file"
+calculator_device=auto
+nequip_chemical_symbols="identity"
+```
+
+To use another bundled model, change only `nequip_model_file`, for example:
+
+```bash
+nequip_model_file="M_NequIP_smdW.pth"
+calculator_model="$model_dir/$nequip_model_file"
+```
+
+The `all_NNP_MODELS/yml_file/` folder contains reference environment YAML files for the model-generation environments. They are included for provenance and troubleshooting, not required for normal DeepConf runs.
+
+### Optimization Settings
+
+| Option | Current default | Description |
+| --- | --- | --- |
+| `optimization_method` | `FIRE` | ASE optimizer for geometry optimization. Common choices are `BFGS`, `LBFGS`, `FIRE`, `GPMin`, `Berny`, `CG`, and `NewtonRaphson` where available. |
+| `thr_fmax` | `0.2` | Force convergence threshold passed to ASE optimizers as `fmax`. Lower values are stricter and slower. |
+| `maxiter` | `50000` | Maximum geometry-optimization steps. |
+
+### RDKit Conformer Generation
+
+| Option | Current default | Description |
+| --- | --- | --- |
+| `ETKDG` | `yes` | `yes` uses RDKit ETKDGv3 embedding. When `ETKDG=yes`, `max_attempts` and `prune_rms_thresh` are not used by the ETKDG branch. |
+| `num_conformers` | `50` | Requested number of RDKit conformers. DeepConf may increase this internally based on torsion count, `nfold`, and `nscale`. |
+| `max_attempts` | `100000` | Maximum embedding attempts for the non-ETKDG RDKit embedding path. |
+| `prune_rms_thresh` | `0.05` | Initial RDKit conformer pruning RMSD threshold for the non-ETKDG embedding path. Smaller values keep more similar conformers. |
+| `nfold` | `2` | Torsion-count scaling factor used when DeepConf estimates a minimum conformer count. |
+| `npick` | `0` | Number of random conformers picked from each initial cluster in addition to the minimum-energy conformer. `0` keeps only the minimum-energy conformer from each initial cluster. |
+| `nscale` | `10` | Additional scaling factor for the number of generated conformers based on torsion count. |
+
+### RMSD Clustering And Final Output
+
+| Option | Current default | Description |
+| --- | --- | --- |
+| `opt_prune_rms_thresh` | `0.5` | RMSD threshold used for post-optimization conformer clustering. This is an actual RMSD threshold in Angstrom. |
+| `opt_prune_diffE_thresh` | `0.01` | Energy threshold for pruning cluster representatives after RMSD clustering. |
+| `cluster_nprocs` | `64` | Number of processes used for post-optimization RMSD matrix calculation and clustering. This can use many CPU cores during RMSD comparisons. |
+| `cluster_chunk_size` | `4000` | Multiprocessing chunk size for RMSD pair calculations. Larger chunks reduce overhead; smaller chunks may help load balancing for very uneven cases. |
+| `cluster_linkage` | `complete` | Linkage method for hierarchical RMSD clustering. `complete` is the recommended/default mode. |
+| `organize_clusters` | `yes` | `yes` creates energy-ranked `cluster_1`, `cluster_2`, ... directories. |
+| `organize_mode` | `move` | `move` places conformer files into cluster directories. `copy` keeps originals and copies them into cluster directories. |
+| `summary_csv` | `cluster_summary.csv` | Name of the cluster summary CSV written under `opt_picked_confs/`. |
+
+The positional command-line interface is backward-compatible: clustering, `verbose`, and calculator-specific options are trailing arguments.
+
+NequIP model settings can alternatively be supplied with environment variables:
 
 ```bash
 export DEEPCONF_NEQUIP_MODEL=/path/to/compiled_or_deployed_model
