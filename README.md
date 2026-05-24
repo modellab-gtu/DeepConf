@@ -66,7 +66,9 @@ Install NequIP support for NequIP-ML workflows:
 pip install nequip==0.6.1
 ```
 
-For AIMNet2 details, see [aimnetcentral](https://github.com/isayevlab/aimnetcentral/tree/main). For NequIP-ML, also provide the in-house deployed NequIP model file required by your workflow.
+For AIMNet2 details, see [aimnetcentral](https://github.com/isayevlab/aimnetcentral/tree/main).
+
+The in-house NequIP `.pth` model files are bundled under `all_NNP_MODELS/`, so they are available after cloning the repository.
 
 For Gaussian16 support, make sure the `g16` command is available in your shell environment.
 
