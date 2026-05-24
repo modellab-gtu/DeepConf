@@ -109,7 +109,12 @@ bash runConfGen.sh
 | --- | --- |
 | `struct_dir` | Directory containing input ligand files. |
 | `add_hydrogen` | `yes` uses Open Babel to add missing hydrogens. Added H atoms are relaxed with heavy atoms fixed using the selected calculator. |
-| `caculator_type` | Calculator choice. The run script uses `ani2x` by default; ANI-family models, AIMNet2, and NequIP-ML can be used when the corresponding calculator support is installed/configured. `g16` and `uff` are also supported paths. |
+| `caculator_type` | Calculator choice. Supported values include `ani1x`, `ani1ccx`, `ani2x`, `aimnet2`, `nequip`, `g16`, and `uff`. |
+| `calculator_model` | Optional calculator model setting. For AIMNet2, use a model name such as `aimnet2`. For NequIP, use the deployed `.pth` model path for older NequIP environments or the compiled model path for newer ones. |
+| `calculator_charge` | Total molecular charge used by AIMNet2. Leave blank to infer the formal charge from the loaded molecule, or set an explicit override. |
+| `calculator_multiplicity` | Spin multiplicity used by AIMNet2. |
+| `calculator_device` | Device used by NequIP, for example `auto`, `cpu`, or `cuda`. |
+| `nequip_chemical_symbols` | Optional NequIP species mapping. Use `identity`, a comma-separated symbol list, or a JSON mapping string when required by the model. |
 | `optimization_method` | ASE optimizer, for example `BFGS`, `LBFGS`, `FIRE`, `GPMin`, or `Berny`. |
 | `pre_optimization_lig` | Optimize the input ligand before conformer generation. |
 | `genconformer` | Generate conformers with RDKit. |
@@ -133,6 +138,25 @@ bash runConfGen.sh
 | `verbose` | `yes` keeps all folders and intermediates. `no` exports only the final SDF and removes each ligand work folder. |
 
 The positional command-line interface is backward-compatible: the new clustering and `verbose` options are trailing arguments.
+
+Calculator-specific options are also trailing arguments, so older command lines still work. NequIP model settings can alternatively be supplied with environment variables:
+
+```bash
+export DEEPCONF_NEQUIP_MODEL=/path/to/compiled_or_deployed_model
+export DEEPCONF_NEQUIP_CHEMICAL_SYMBOLS=identity
+```
+
+For AIMNet2, `calculator_model` can be left blank to use `aimnet2`, or set with:
+
+```bash
+export DEEPCONF_AIMNET_MODEL=aimnet2
+```
+
+The AIMNet2 charge is inferred from the molecule's formal charge by default. To override it explicitly:
+
+```bash
+export DEEPCONF_AIMNET_CHARGE=-1
+```
 
 ## Output
 

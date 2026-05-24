@@ -32,8 +32,19 @@ opt_prune_rms_thresh=0.5
 # Energy threshold for post-RMSD representative pruning.
 opt_prune_diffE_thresh=0.01
 
-# calculator type (ani2x/g16/uff)
+# calculator type (ani1x/ani1ccx/ani2x/aimnet2/nequip/g16/uff)
 caculator_type="ani2x"
+
+# Optional calculator settings:
+# - AIMNet2: set calculator_model to aimnet2, aimnet2-2025, etc.
+#   Leave calculator_charge blank to infer the SDF formal charge, or set an override.
+# - NequIP: set calculator_model to the deployed .pth path for older NequIP,
+#   or to the compiled model path for newer NequIP.
+calculator_model=""
+calculator_charge=""
+calculator_multiplicity=1
+calculator_device=auto
+nequip_chemical_symbols=""
 
 # optimize generated conformers (yes/no)
 optimization_conf=yes
@@ -94,5 +105,10 @@ verbose=yes
 "$organize_clusters" \
 "$organize_mode" \
 "$summary_csv" \
-"$verbose"
+"$verbose" \
+"$calculator_model" \
+"$calculator_charge" \
+"$calculator_multiplicity" \
+"$calculator_device" \
+"$nequip_chemical_symbols"
 

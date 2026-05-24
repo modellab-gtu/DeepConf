@@ -231,6 +231,11 @@ def build_command(args, input_dir, case):
         case["organize_mode"],
         args.summary_csv,
         str_bool(case["verbose"]),
+        args.calculator_model,
+        str(args.calculator_charge),
+        str(args.calculator_multiplicity),
+        args.calculator_device,
+        args.nequip_chemical_symbols,
     ]
 
 
@@ -277,6 +282,7 @@ def run_case(args, case, source_sdf, file_base, output_root):
         "elapsed_s": round(elapsed, 2),
         "expected_sdf": str(expected_sdf),
         "log": str(log_path),
+        "command": " ".join(cmd),
         "case": case,
         "sdf_summary": sdf_summary,
         "work_dir_exists": work_dir.exists(),
@@ -317,9 +323,15 @@ def parse_args():
     parser.add_argument("--input-sdf", type=Path, default=None)
     parser.add_argument("--output-root", type=Path, default=None)
     parser.add_argument("--calculator", default="ani2x")
+    parser.add_argument("--calculator-model", default="")
+    parser.add_argument("--calculator-charge", default="")
+    parser.add_argument("--calculator-multiplicity", type=int, default=1)
+    parser.add_argument("--calculator-device", default="auto")
+    parser.add_argument("--nequip-chemical-symbols", default="")
     parser.add_argument("--optimization-method", default="BFGS")
     parser.add_argument("--add-hydrogen", action="store_true")
     parser.add_argument("--full", action="store_true")
+    parser.add_argument("--case-filter", action="append", default=[])
     parser.add_argument("--timeout", type=int, default=900)
 
     parser.add_argument("--nprocs", type=int, default=1)
@@ -360,7 +372,17 @@ def main():
         file_base = source_sdf.stem
 
     results = []
-    for case in build_cases(full=args.full):
+    cases = build_cases(full=args.full)
+    if args.case_filter:
+        cases = [
+            case for case in cases
+            if any(case_filter in case["name"] for case_filter in args.case_filter)
+        ]
+
+    if not cases:
+        raise ValueError("No smoke-test cases matched the requested filters")
+
+    for case in cases:
         print(f"Running {case['name']} ...", flush=True)
         try:
             results.append(run_case(args, case, source_sdf, file_base, args.output_root))
