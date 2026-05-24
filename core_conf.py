@@ -6,9 +6,10 @@ from ase.io import write
 import rdkit
 from  rdkit import Chem
 from  rdkit.Chem import AllChem
+from rdkit.Geometry import Point3D
 #  import os_util
 from collections import defaultdict
-import sys, os
+import sys, os, shutil
 import numpy as np
 import pandas as pd
 
@@ -18,6 +19,7 @@ from functools import wraps
 
 from scipy.cluster.vq import kmeans, vq, whiten
 from scipy.cluster.hierarchy import linkage, fcluster
+from scipy.spatial.distance import squareform
 
 from random import sample
 
@@ -51,14 +53,25 @@ def calcRMSDsymm(pair_idx, mol_list):
                                      prealigned=False)
                    )
         else:
-            return (Chem.rdMolAlign
-                    .GetBestRMS(mol_list[idx1],
-                                mol_list[idx2])
-                   )
+            mol1 = mol_list[idx1]
+            mol2 = mol_list[idx2]
+            try:
+                return Chem.rdMolAlign.GetBestRMS(mol1, mol2)
+            except RuntimeError:
+                if mol1.GetNumAtoms() != mol2.GetNumAtoms():
+                    name1 = mol1.GetProp("_Name") if mol1.HasProp("_Name") else str(idx1)
+                    name2 = mol2.GetProp("_Name") if mol2.HasProp("_Name") else str(idx2)
+                    raise RuntimeError(
+                        f"RMSD failed and atom counts differ: {name1} "
+                        f"({mol1.GetNumAtoms()}) vs {name2} ({mol2.GetNumAtoms()})"
+                    )
+
+                atom_map = [(i, i) for i in range(mol1.GetNumAtoms())]
+                return Chem.rdMolAlign.AlignMol(mol2, mol1, atomMap=atom_map)
 
 
 #  @calcFuncRunTime
-def getDistMatrix(mol_list, conformerIds=None):
+def getDistMatrix(mol_list, conformerIds=None, nprocs=None, chunk_size=4000):
 
     n_mol=len(mol_list)
     if n_mol == 1 and conformerIds:
@@ -68,12 +81,24 @@ def getDistMatrix(mol_list, conformerIds=None):
         print("Clustering do not applied.. There is just one conformer")
         return None
 
-    with Pool(NPROCS_ALL) as pool:
+    if nprocs is None or nprocs <= 0:
+        nprocs = NPROCS_ALL
+
+    print(f"RMSD matrix calculation using {nprocs} processes; pool chunksize={chunk_size}")
+
+    with Pool(nprocs) as pool:
         results = pool.starmap(calcRMSDsymm,
                                zip(product(range(n_mol), repeat=2),
-                                   repeat(mol_list)))
+                                   repeat(mol_list)),
+                               chunksize=chunk_size)
 
-    ordered_all_rmsd = [result for result in results if result]
+    ordered_all_rmsd = [result for result in results if result is not None]
+    expected = n_mol * (n_mol - 1) // 2
+    if len(ordered_all_rmsd) != expected:
+        raise RuntimeError(
+            f"RMSD matrix construction failed: expected {expected} pairwise "
+            f"RMSD values, got {len(ordered_all_rmsd)}."
+        )
     return symmetricize(n_mol, ordered_all_rmsd)
 
 
@@ -112,9 +137,10 @@ class confGen:
 
     """
 
-    def __init__(self, mol_path, addH, WORK_DIR):
+    def __init__(self, mol_path, addH, WORK_DIR, verbose=True):
         self.mol_path = mol_path
         self.WORK_DIR = WORK_DIR
+        self.verbose = bool(verbose)
 
         # for activete g16 optmization algorithm
         self.optG16 = False
@@ -122,12 +148,12 @@ class confGen:
         # set add missing H
         self.addH = addH
 
+        # initialize calcultor
+        self.calculator = None
+
         # initialize RW mol
         self.rw_mol = None
         self._loadRWMol()
-
-        # initialize calcultor
-        self.calculator = None
 
         # initialize geom opt paprameters
         self.maxiter = None
@@ -136,8 +162,73 @@ class confGen:
         # initialize optimization method
         self.opt_method = None
 
-        # trial number
+        # trial number
         self.n_trial = 1
+
+    def setVerbose(self, verbose=True):
+        self.verbose = bool(verbose)
+        return self
+
+    def _optimizer_logfile(self):
+        return '-' if getattr(self, "verbose", True) else None
+
+    def optimizeAddedHydrogensWithCurrentCalculator(self, fmax=0.05, maxiter=200, opt_method="LBFGS"):
+        if not self.addH:
+            return self
+
+        if self.calculator is None:
+            print(
+                "Warning: add_hydrogen=yes but no calculator is assigned yet; "
+                "skipping fixed-heavy-atom H relaxation."
+            )
+            return self
+
+        old_opt_method = self.opt_method
+        old_fmax = self.fmax
+        old_maxiter = self.maxiter
+
+        if getattr(self, "verbose", True):
+            print("Relaxing added hydrogens with fixed heavy atoms using the user-selected calculator.")
+
+        try:
+            self.setOptMethod(opt_method)
+            self.setOptParams(fmax=fmax, maxiter=maxiter)
+            self.geomOptimization(fix_heavy_atoms=True)
+        finally:
+            self.opt_method = old_opt_method
+            self.fmax = old_fmax
+            self.maxiter = old_maxiter
+
+        return self
+
+    def optimizeAddedHydrogensWithMM(self, maxiter=200):
+        if not self.addH:
+            return self
+
+        if getattr(self, "verbose", True):
+            print("Relaxing added hydrogens with fixed heavy atoms using RDKit MM.")
+
+        mol = Chem.RWMol(self.rw_mol)
+        props = AllChem.MMFFGetMoleculeProperties(mol)
+        if props is not None:
+            ff = AllChem.MMFFGetMoleculeForceField(mol, props)
+        else:
+            ff = AllChem.UFFGetMoleculeForceField(mol)
+
+        if ff is None:
+            print(
+                "Warning: RDKit MM force field could not be assigned; "
+                "skipping fixed-heavy-atom H relaxation."
+            )
+            return self
+
+        for atom in mol.GetAtoms():
+            if atom.GetSymbol() != "H":
+                ff.AddFixedPoint(atom.GetIdx())
+
+        ff.Minimize(maxIts=maxiter)
+        self.rw_mol = mol
+        return self
 
     def getFileBase(self):
         return self.mol_path.split("/")[-1].split(".")[0]
@@ -211,12 +302,8 @@ class confGen:
             self._loadMolWithRW(tmp_file_name, sanitize=False)
             self.rw_mol = self._rdKekuleizeError(self.rw_mol)
 
-        # optmization for just added H
-        if self.addH:
-            self.setOptMethod(opt_method="LBFGS")
-            self.setOptParams(fmax=0.05, maxiter=200)
-            self.setANI2XCalculator()
-            self.geomOptimization(fix_heavy_atoms=True)
+        # Added hydrogens are relaxed after runConfGen.py assigns the
+        # user-selected calculator. Do not hard-code ANI2x here.
 
     def addHwithRD(self):
         self.rw_mol = rdkit.Chem.rdmolops.AddHs(self.rw_mol, addCoords=True)
@@ -280,38 +367,76 @@ class confGen:
 
         return cluster_conf_id
 
-    #  @calcFuncRunTime
-    def _getClusterRMSDFromFiles(self, conf_dir, rmsd_thresh):
+    def _readSDFEnergy(self, file_path, default=np.inf):
+        try:
+            mol = next(Chem.SDMolSupplier(file_path, removeHs=False))
+        except Exception:
+            return default
 
-        mol_dict = {next(Chem.SDMolSupplier(f"{conf_dir}/{fl_name}", removeHs=False)):
-                      fl_name for fl_name in os.listdir(conf_dir)
-                      if fl_name.endswith(".sdf")}
+        if mol is None or not mol.HasProp("Energy"):
+            return default
+
+        try:
+            return float(mol.GetProp("Energy"))
+        except Exception:
+            return default
+
+    #  @calcFuncRunTime
+    def _getClusterRMSDFromFiles(self, conf_dir, rmsd_thresh, linkage_method="complete",
+                                 cluster_nprocs=None, cluster_chunk_size=4000):
+        sdf_files = sorted([fl_name for fl_name in os.listdir(conf_dir)
+                            if fl_name.endswith(".sdf")])
+
         mol_list = []
-        for mol, fl_name in mol_dict.items():
+        file_energy = {}
+        for fl_name in sdf_files:
+            sdf_path = f"{conf_dir}/{fl_name}"
+            mol = next(Chem.SDMolSupplier(sdf_path, removeHs=False))
+            if mol is None:
+                print(f"Warning: could not read {sdf_path}; skipping")
+                continue
+
             mol.SetProp("_Name", fl_name)
             mol_list.append(mol)
+            file_energy[fl_name] = self._readSDFEnergy(sdf_path)
 
-        dist_matrix = getDistMatrix(mol_list, conformerIds=None)
+        if len(mol_list) <= 1:
+            print("Clustering do not applied.. There is just one conformer")
+            return 0
+
+        print(f"RMSD clustering optimized conformers with {linkage_method} linkage")
+        print(f"RMSD threshold: {rmsd_thresh} Angstrom")
+
+        dist_matrix = getDistMatrix(
+            mol_list,
+            conformerIds=None,
+            nprocs=cluster_nprocs,
+            chunk_size=cluster_chunk_size,
+        )
         if dist_matrix is None:
             return 0
 
-        linked = linkage(dist_matrix,'complete')
-        labelList = [mol.GetProp('_Name') for mol in mol_list]
-        cluster_conf = defaultdict(list)
-        for key, fl_name in zip(fcluster(linked, rmsd_thresh, criterion='distance'), labelList):
-            cluster_conf[key].append(fl_name)
+        condensed_dist_matrix = squareform(dist_matrix, checks=False)
+        linked = linkage(condensed_dist_matrix, method=linkage_method)
 
-            # save clusturedd files seperately
-            directory = f"{conf_dir}/cluster_{key}"
-            if not os.path.exists(directory):
-                os.mkdir(directory)
-            file_path = f"{directory}/{fl_name}"
-            for mol in mol_list:
-                if mol.GetProp('_Name') == fl_name:
-                    mol = mol
-                    break
-            with Chem.rdmolfiles.SDWriter(file_path) as writer:
-                writer.write(mol)
+        raw_cluster_conf = defaultdict(list)
+        labelList = [mol.GetProp('_Name') for mol in mol_list]
+        for key, fl_name in zip(fcluster(linked, rmsd_thresh, criterion='distance'), labelList):
+            raw_cluster_conf[key].append(fl_name)
+
+        cluster_records = []
+        for raw_cluster_id, fl_names in raw_cluster_conf.items():
+            fl_names_sorted = sorted(fl_names, key=lambda f: file_energy.get(f, np.inf))
+            rep_file = fl_names_sorted[0]
+            rep_energy = file_energy.get(rep_file, np.inf)
+            cluster_records.append((raw_cluster_id, rep_file, rep_energy, fl_names_sorted))
+
+        cluster_records.sort(key=lambda x: x[2])
+
+        cluster_conf = defaultdict(list)
+        for new_cluster_id, (_, rep_file, rep_energy, fl_names_sorted) in enumerate(cluster_records, start=1):
+            cluster_conf[new_cluster_id] = fl_names_sorted
+            print(f"cluster_{new_cluster_id}: representative={rep_file}, Energy={rep_energy}, size={len(fl_names_sorted)}")
 
         return cluster_conf
 
@@ -322,71 +447,176 @@ class confGen:
             for j, val2 in  enumerate(files_minE.values()):
                 e_diff = val1 - val2
                 dist_matrix[i, j] = abs(val1 - val2 )
-        #  print(dist_matrix)
-        linked = linkage(dist_matrix,'complete')
+        linked = linkage(squareform(dist_matrix, checks=False), 'complete')
         label_list = list(files_minE.keys())
         cluster_conf = defaultdict(list)
         for key, fl_name in zip(fcluster(linked, diffE_thresh, criterion='distance'), label_list):
             cluster_conf[key].append(fl_name)
         return cluster_conf
 
-    def _pruneOptConfs(self, cluster_conf, confs_energies, conf_dir, opt_prune_diffE_thresh):
-        i = 0
+    def _findConformerFileAfterOrganization(self, conf_dir, fl_name, cluster_conf=None):
+        direct_path = f"{conf_dir}/{fl_name}"
+        if os.path.exists(direct_path):
+            return direct_path
 
-        local_files_minE = {}
-        # for rmsd filter
-        print("Applied diff RMSD filter (Angstrom)")
-        for fl_names in cluster_conf.values():
-            for j, fl_name in enumerate(fl_names):
-                #  e = float(confs_energies.loc[confs_energies["FileName"] == fl_name, " Energy(eV)"].item())
-                e = float(confs_energies.loc[confs_energies["FileName"] == fl_name, "Energy(eV)"].item())
-                if i == 0:
-                    global_minE = e
-                    global_minE_file = fl_name
-                else:
-                    if global_minE > e:
-                        global_minE = e
-                        global_minE_file = fl_name
-                i += 1
+        if cluster_conf is not None:
+            for cluster_id, fl_names in cluster_conf.items():
+                if fl_name in fl_names:
+                    cluster_path = f"{conf_dir}/cluster_{cluster_id}/{fl_name}"
+                    if os.path.exists(cluster_path):
+                        return cluster_path
 
-                if j == 0:
-                    minE = e
-                    minE_file = fl_name
-                else:
-                    if minE > e:
-                        minE = e
-                        minE_file = fl_name
+        for root, dirs, files in os.walk(conf_dir):
+            if fl_name in files:
+                return os.path.join(root, fl_name)
 
-            fl_names.remove(minE_file)
-            local_files_minE[minE_file] = minE
+        return None
 
-            if len (fl_names) != 0:
-                for rm_file in fl_names:
-                    print("Removed", rm_file)
-                    os.remove(f"{conf_dir}/{rm_file}")
+    def _writeEnergyRankedRepresentativeSDF(self, conf_dir, selected_sorted, cluster_conf=None):
+        output_sdf = f"{conf_dir}/{self.getFileBase()}_output.sdf"
 
-        # for the energy filter
-        if len(local_files_minE) > 1:
-            print("Applied diff Energy filter (eV/Atom)")
-            cluster_conf = self._getCluster_diffE(local_files_minE, diffE_thresh=opt_prune_diffE_thresh)
-            for fl_names in cluster_conf.values():
-                if len(fl_names) > 1:
-                    for fl_name in fl_names[1:]: # remove all file except first
-                        if fl_name == f"pruned_{global_minE_file}": # if any candidate removed file is global min 
-                            fl_name = fl_names[0] #  remove first file
-                        print("Removed", fl_name)
-                        os.remove(f"{conf_dir}/{fl_name}")
-                        del local_files_minE[fl_name]
+        if os.path.exists(output_sdf):
+            os.remove(output_sdf)
 
-        local_files_minE_sorted = dict(sorted(local_files_minE.items(), key=lambda item: item[1]))
+        nwritten = 0
+        with Chem.SDWriter(output_sdf) as w:
+            for rank, (fl_name, e) in enumerate(selected_sorted.items(), start=1):
+                mol_path = self._findConformerFileAfterOrganization(
+                    conf_dir,
+                    fl_name,
+                    cluster_conf=cluster_conf,
+                )
+                if mol_path is None:
+                    print(f"Warning: representative source SDF not found for {fl_name}; skipping")
+                    continue
 
-        with Chem.SDWriter(f"{conf_dir}/{self.getFileBase()}_output.sdf") as w:
-            for fl_name, e in local_files_minE_sorted.items():
-                mol = next(Chem.SDMolSupplier(f"{conf_dir}/{fl_name}", removeHs=False))
+                mol = next(Chem.SDMolSupplier(mol_path, removeHs=False))
+                if mol is None:
+                    print(f"Warning: could not read representative SDF: {mol_path}")
+                    continue
+
                 mol.SetProp("Energy", str(e))
                 mol.SetProp("_Name", fl_name)
+                mol.SetProp("RepresentativeRankByEnergy", str(rank))
+                mol.SetProp("SourceFile", fl_name)
                 w.write(mol)
-                os.remove(f"{conf_dir}/{fl_name}")
+                nwritten += 1
+
+        if nwritten == 0:
+            print(f"Warning: no molecules were written to representative SDF: {output_sdf}")
+        else:
+            print(f"Representative SDF written to: {output_sdf} ({nwritten} structures)")
+
+        return output_sdf
+
+    def _pruneOptConfs(self, cluster_conf, confs_energies, conf_dir, opt_prune_diffE_thresh,
+                       organize_clusters=True, organize_mode="move", summary_csv="cluster_summary.csv"):
+        print("Applied diff RMSD filter (Angstrom)")
+
+        energy_by_file = {}
+        for _, row in confs_energies.iterrows():
+            energy_by_file[row["FileName"]] = float(row["Energy(eV)"])
+
+        local_files_minE = {}
+        global_minE = None
+        global_minE_file = None
+
+        for cluster_id, fl_names in cluster_conf.items():
+            fl_names.sort(key=lambda f: energy_by_file[f])
+            minE_file = fl_names[0]
+            minE = energy_by_file[minE_file]
+            local_files_minE[minE_file] = minE
+
+            if global_minE is None or minE < global_minE:
+                global_minE = minE
+                global_minE_file = minE_file
+
+            print(f"cluster_{cluster_id}: representative={minE_file}, Energy={minE}, size={len(fl_names)}")
+
+        selected_after_energy_filter = dict(local_files_minE)
+
+        if len(selected_after_energy_filter) > 1:
+            print("Applied diff Energy filter (eV/Atom)")
+            energy_cluster_conf = self._getCluster_diffE(
+                selected_after_energy_filter,
+                diffE_thresh=opt_prune_diffE_thresh,
+            )
+            for fl_names in energy_cluster_conf.values():
+                if len(fl_names) > 1:
+                    fl_names.sort(key=lambda f: selected_after_energy_filter[f])
+                    keep_file = fl_names[0]
+                    if global_minE_file in fl_names:
+                        keep_file = global_minE_file
+
+                    for fl_name in fl_names:
+                        if fl_name == keep_file:
+                            continue
+                        print("Energy-pruned representative", fl_name)
+                        if fl_name in selected_after_energy_filter:
+                            del selected_after_energy_filter[fl_name]
+
+        selected_sorted = dict(sorted(selected_after_energy_filter.items(), key=lambda item: item[1]))
+
+        self._writeEnergyRankedRepresentativeSDF(
+            conf_dir,
+            selected_sorted,
+            cluster_conf=cluster_conf,
+        )
+
+        summary_rows = []
+        for cluster_id, fl_names in cluster_conf.items():
+            cluster_dir_name = f"cluster_{cluster_id}"
+            directory = f"{conf_dir}/{cluster_dir_name}"
+
+            if organize_clusters:
+                if os.path.exists(directory):
+                    shutil.rmtree(directory)
+                os.mkdir(directory)
+
+            for fl_name in fl_names:
+                src = f"{conf_dir}/{fl_name}"
+                dst = f"{directory}/{fl_name}"
+                is_rmsd_rep = fl_name in local_files_minE
+                is_final_rep = fl_name in selected_sorted
+
+                summary_rows.append({
+                    "ClusterRank": cluster_id,
+                    "ClusterDir": cluster_dir_name if organize_clusters else "",
+                    "FileName": fl_name,
+                    "Energy(eV)": energy_by_file[fl_name],
+                    "RMSDRepresentative": is_rmsd_rep,
+                    "FinalRepresentative": is_final_rep,
+                })
+
+                if organize_clusters:
+                    if os.path.exists(src):
+                        if organize_mode == "move":
+                            shutil.move(src, dst)
+                        elif organize_mode == "copy":
+                            shutil.copy2(src, dst)
+                        else:
+                            raise ValueError("organize_mode must be 'move' or 'copy'")
+                    else:
+                        print(f"Warning: source file not found during cluster organization: {src}")
+
+        summary_df = pd.DataFrame(summary_rows)
+        summary_df = summary_df.sort_values(["ClusterRank", "Energy(eV)"])
+
+        if summary_csv in (None, "", "none", "None", "NO", "no"):
+            summary_csv_path = f"{conf_dir}/{self.getFileBase()}_cluster_summary.csv"
+        elif os.path.isabs(summary_csv):
+            summary_csv_path = summary_csv
+        else:
+            summary_csv_path = f"{conf_dir}/{summary_csv}"
+
+        summary_df.to_csv(summary_csv_path, index=False)
+        print(f"Cluster summary written to: {summary_csv_path}")
+
+        self._writeEnergyRankedRepresentativeSDF(
+            conf_dir,
+            selected_sorted,
+            cluster_conf=cluster_conf,
+        )
 
     def genGonformers(self, file_path,
                          numConfs=100,
@@ -404,9 +634,19 @@ class confGen:
                          nfold=2,
                          npick=2,
                          nscale=1,
+                         cluster_nprocs=None,
+                         cluster_chunk_size=4000,
+                         cluster_linkage="complete",
+                         organize_clusters=True,
+                         organize_mode="move",
+                         summary_csv="cluster_summary.csv",
                         ):
 
         import copy
+
+        if not getattr(self, "verbose", True):
+            from rdkit import RDLogger
+            RDLogger.DisableLog('rdApp.warning')
 
         #  self.addHwithRD()
         print("Woking on conformer generation process")
@@ -522,7 +762,7 @@ class confGen:
 
             #  save optimized structure  with rdkit as sdf
             with Chem.rdmolfiles.SDWriter(conf_file_path) as writer:
-                rwmol = self.aseAtoms2rwMol(ase_atoms)
+                rwmol = self.aseAtoms2rwMol(ase_atoms, template_mol=mol)
                 rwmol.SetProp("Energy", str(e))
                 rwmol.SetProp("_Name", f"{prefix}conf_{conformerId}")
                 writer.write(rwmol)
@@ -538,11 +778,44 @@ class confGen:
         if optimization_conf:
             confs_energies = pd.read_csv(f"{PICKED_CONF_DIR}/{prefix}picked_confs_energies.csv")
             #  print(confs_energies)
-            cluster_conf = self._getClusterRMSDFromFiles(PICKED_CONF_DIR, rmsd_thresh=opt_prune_rms_thresh)
+            cluster_conf = self._getClusterRMSDFromFiles(
+                PICKED_CONF_DIR,
+                rmsd_thresh=opt_prune_rms_thresh,
+                linkage_method=cluster_linkage,
+                cluster_nprocs=cluster_nprocs,
+                cluster_chunk_size=cluster_chunk_size,
+            )
             if cluster_conf != 0:
-                self._pruneOptConfs(cluster_conf, confs_energies, PICKED_CONF_DIR, opt_prune_diffE_thresh)
+                self._pruneOptConfs(
+                    cluster_conf,
+                    confs_energies,
+                    PICKED_CONF_DIR,
+                    opt_prune_diffE_thresh,
+                    organize_clusters=organize_clusters,
+                    organize_mode=organize_mode,
+                    summary_csv=summary_csv,
+                )
             else:
-                os.rename(f"{PICKED_CONF_DIR}/{confs_energies['FileName'][0]}", f"{PICKED_CONF_DIR}/{prefix}output.sdf")
+                src = f"{PICKED_CONF_DIR}/{confs_energies['FileName'][0]}"
+                dst = f"{PICKED_CONF_DIR}/{self.getFileBase()}_output.sdf"
+                os.rename(src, dst)
+        else:
+            confs_energies = pd.read_csv(f"{PICKED_CONF_DIR}/{prefix}picked_confs_energies.csv")
+            confs_energies = confs_energies.sort_values("Energy(eV)")
+            output_sdf = f"{PICKED_CONF_DIR}/{self.getFileBase()}_output.sdf"
+            with Chem.SDWriter(output_sdf) as w:
+                for rank, (_, row) in enumerate(confs_energies.iterrows(), start=1):
+                    fl_name = row["FileName"]
+                    e = float(row["Energy(eV)"])
+                    mol_path = f"{PICKED_CONF_DIR}/{fl_name}"
+                    mol_out = next(Chem.SDMolSupplier(mol_path, removeHs=False))
+                    if mol_out is None:
+                        continue
+                    mol_out.SetProp("Energy", str(e))
+                    mol_out.SetProp("_Name", fl_name)
+                    mol_out.SetProp("RepresentativeRankByEnergy", str(rank))
+                    w.write(mol_out)
+            print(f"Representative SDF written to: {output_sdf}")
 
     def _calcEnergyWithMM(self, mol, conformerId, minimizeIts):
         ff = rdkit.Chem.AllChem.MMFFGetMoleculeForceField(
@@ -575,7 +848,8 @@ class confGen:
     def setANI2XCalculator(self):
         import torchani
         import torch
-        print("Nuber of CUDA devices: ", torch.cuda.device_count())
+        if getattr(self, "verbose", True):
+            print("Number of CUDA devices: ", torch.cuda.device_count())
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
         self.calculator = torchani.models.ANI2x().to(device).ase()
@@ -612,16 +886,16 @@ class confGen:
     def _getOptMethod(self, ase_atoms):
         if self.opt_method is None or self.opt_method=="lbfgs":
             from ase.optimize import LBFGS
-            return LBFGS(ase_atoms)
+            return LBFGS(ase_atoms, logfile=self._optimizer_logfile())
         elif self.opt_method=="bfgs":
             from ase.optimize import BFGS
-            return BFGS(ase_atoms)
+            return BFGS(ase_atoms, logfile=self._optimizer_logfile())
         elif self.opt_method=="fire":
             from ase.optimize import FIRE
-            return FIRE(ase_atoms)
+            return FIRE(ase_atoms, logfile=self._optimizer_logfile())
         elif self.opt_method=="gpmin":
             from ase.optimize import GPMin
-            return GPMin(ase_atoms)
+            return GPMin(ase_atoms, logfile=self._optimizer_logfile())
         elif self.opt_method=="berny":
             from ase.optimize import Berny
             return Berny(ase_atoms)
@@ -683,7 +957,7 @@ class confGen:
             dyn = self._getOptMethod(ase_atoms)
             dyn.run(fmax=self.fmax, steps=self.maxiter)
 
-        self.rw_mol = self.aseAtoms2rwMol(ase_atoms)
+        self.rw_mol = self.aseAtoms2rwMol(ase_atoms, template_mol=self.rw_mol)
         return ase_atoms.get_potential_energy()
 
     def _rwConformer2AseAtoms(self, mol, conformerId):
@@ -716,18 +990,42 @@ class confGen:
                              ))
         return ase_atoms
 
-    def aseAtoms2rwMol(self, ase_atoms):
+    def aseAtoms2rwMol(self, ase_atoms, template_mol=None):
+        """
+        Preserve the RDKit topology and replace only coordinates from ASE.
 
-        write("tmp.pdb", ase_atoms)
+        The fixed topology is used only so RMSD clustering compares conformers
+        with a consistent atom/bond graph. Coordinates remain the optimized ASE
+        coordinates, so proton-transfer-like geometries are still written.
+        """
 
-        rd_mol = Chem.rdmolfiles.MolFromPDBFile("tmp.pdb", sanitize=True, removeHs=False)
-        self._rmFileExist("tmp.pdb")
+        if template_mol is None:
+            template_mol = self.rw_mol
 
-        try:
-            return AllChem.AssignBondOrdersFromTemplate(self.rw_mol, rd_mol)
-        except:
-            print("Warnings: Can not assign bond borders!")
-            return rd_mol
+        if template_mol is None:
+            raise ValueError("template_mol is None; cannot preserve RDKit topology.")
+
+        n_atoms_rdkit = template_mol.GetNumAtoms()
+        n_atoms_ase = len(ase_atoms)
+        if n_atoms_rdkit != n_atoms_ase:
+            raise ValueError(
+                f"Atom count mismatch while converting ASE->RDKit: "
+                f"template has {n_atoms_rdkit}, ASE has {n_atoms_ase}"
+            )
+
+        rd_mol = Chem.Mol(template_mol)
+        rd_mol.RemoveAllConformers()
+
+        conf = Chem.Conformer(n_atoms_rdkit)
+        positions = ase_atoms.get_positions()
+        for i, pos in enumerate(positions):
+            conf.SetAtomPosition(
+                i,
+                Point3D(float(pos[0]), float(pos[1]), float(pos[2]))
+            )
+
+        rd_mol.AddConformer(conf, assignId=True)
+        return Chem.RWMol(rd_mol)
 
 
     def writeAseAtoms(self, file_path):
