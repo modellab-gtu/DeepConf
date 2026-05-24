@@ -172,12 +172,13 @@ def _formal_charge_from_ligand(lig):
     return int(Chem.GetFormalCharge(mol))
 
 
-def _parse_calculator_charge(value, lig):
-    value = _value_or_env(value, "DEEPCONF_AIMNET_CHARGE", "")
+def _parse_calculator_charge(value, lig, calculator_label="calculator",
+                             env_name="DEEPCONF_CALCULATOR_CHARGE"):
+    value = _value_or_env(value, env_name, "")
     if value is None or str(value).strip() == "":
         charge = _formal_charge_from_ligand(lig)
         if verbose:
-            print(f"Using inferred molecular charge for AIMNet2: {charge}")
+            print(f"Using inferred molecular charge for {calculator_label}: {charge}")
         return charge
 
     return int(float(value))
@@ -311,7 +312,7 @@ def _export_final_sdf_and_cleanup(WORK_DIR, file_base, prefix):
     return export_sdf
 
 
-def setG16calculator(lig, file_base, label, WORK_DIR):
+def setG16calculator(lig, file_base, label, WORK_DIR, charge=0, mult=1):
     lig.setG16Calculator(
             label="%s/g16_%s/%s"%(WORK_DIR, label, file_base),
             chk="",
@@ -320,6 +321,8 @@ def setG16calculator(lig, file_base, label, WORK_DIR):
             basis="6-31G*",
             scf="XQC, maxconventionalcycles=100",
             extra="nosymm",
+            charge=charge,
+            mult=mult,
 
             )
     return lig
@@ -398,7 +401,19 @@ def runConfGen(file_name):
     if calculator_key in ("ani1x", "ani1ccx", "ani2x"):
         lig.setANICalculator(calculator_key)
     elif "g16" in calculator_type.lower():
-        lig = setG16calculator(lig, file_base, label="calculation", WORK_DIR=WORK_DIR)
+        lig = setG16calculator(
+            lig,
+            file_base,
+            label="calculation",
+            WORK_DIR=WORK_DIR,
+            charge=_parse_calculator_charge(
+                calculator_charge,
+                lig,
+                calculator_label="Gaussian16",
+                env_name="DEEPCONF_G16_CHARGE",
+            ),
+            mult=calculator_mult,
+        )
     elif "uff" in calculator_type.lower():
         if optimization_conf:
             print("UFF calculator not support optimization")
@@ -412,7 +427,12 @@ def runConfGen(file_name):
         model_name = _value_or_env(calculator_model, "DEEPCONF_AIMNET_MODEL", default_model)
         lig.setAIMNet2Calculator(
             model_name=model_name,
-            charge=_parse_calculator_charge(calculator_charge, lig),
+            charge=_parse_calculator_charge(
+                calculator_charge,
+                lig,
+                calculator_label="AIMNet2",
+                env_name="DEEPCONF_AIMNET_CHARGE",
+            ),
             mult=calculator_mult,
         )
     elif "nequip" in calculator_type.lower():

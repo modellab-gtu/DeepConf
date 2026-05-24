@@ -38,6 +38,8 @@ caculator_type="aimnet2"
 # Optional calculator settings:
 # - AIMNet2: set calculator_model to aimnet2, aimnet2-2025, etc.
 #   Leave calculator_charge blank to infer the SDF formal charge, or set an override.
+# - Gaussian16: calculator_charge and calculator_multiplicity are passed to ASE Gaussian.
+#   Leave calculator_charge blank to infer the SDF formal charge.
 # - NequIP: set calculator_model to the deployed .pth path for older NequIP,
 #   or to the compiled model path for newer NequIP.
 #   If caculator_type="nequip" and calculator_model is blank, DeepConf uses
