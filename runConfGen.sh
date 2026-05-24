@@ -1,68 +1,98 @@
 #! /usr/bin/env bash
 
-ligPrep_DIR="$HOME/Desktop/DeepConf/"
+ligPrep_DIR="$HOME/Desktop/DeepConf"
 PYTHON_DIR="$HOME/miniconda3/bin"
 
-# struct_dir=./test_akocak
-struct_dir=./test_akocak
+# Set this to your ligand/input directory.
+struct_dir="./test_akocak"
 
-# adding hydrogen if missing (yes/no) if yes, constraint heavy atoms and minimize hydrogens.
+# adding hydrogen if missing (yes/no) if yes, constrain heavy atoms and minimize hydrogens.
 add_hydrogen=no
 
-# set optizetions methods whichs availble in ASE (BFGS, LBFGS, GPMin, FIRE, Berny)
+# set optimization method available in ASE (BFGS, LBFGS, GPMin, FIRE, Berny)
 optimization_method=BFGS
-# optimization_method=newtonraphson
-# optimization_method=gpmin
 
-# optimization ligand if desired before conformer generation (yes/no)
+# optimize ligand before conformer generation (yes/no)
 pre_optimization_lig=yes
 
-# generate conformer if desired (yes/no)
+# generate conformers (yes/no)
 genconformer=yes
 
-#configuration for conformer generator parameters yes or no. No uses RDKit. if ETKG yes, max_attempts and prune_rms_threshold are redundant (not used).
+# conformer generator parameters. If ETKDG=yes, max_attempts and prune_rms_thresh are not used.
 ETKDG=yes
 num_conformers=1000
 max_attempts=100000
 
-# This is RMSD threshold for generation of the conformers at the beginning used in ETKG or torsion points by rdkit
+# RMSD threshold for initial RDKit conformer pruning.
 prune_rms_thresh=0.0005
 
-# this is RMSD threshold and  used for f-clustering after optimization of the picked conformers. Should be 0.1-0.5Angstrom usuually.
+# RMSD threshold for post-optimization conformer clustering.
 opt_prune_rms_thresh=0.5
 
-# this is RMSD threshold and  used for f-clustering after optimization of the picked conformers. eV
+# Energy threshold for post-RMSD representative pruning.
 opt_prune_diffE_thresh=0.01
 
-# select caclulator type (ani2x/g16) for optimization conf
-# caculator_type=g16
+# calculator type (ani2x/g16/uff)
 caculator_type="ani2x"
 
-# perform geometry optimization for conformers if desired (yes/no)
+# optimize generated conformers (yes/no)
 optimization_conf=yes
 
-# perform geometry optimization for orginal ligand if desired (yes/no)
+# optimize original ligand only (yes/no)
 optimization_lig=no
 
-# set number of procssors for g16 calcultor (default=all cpu)
+# number of processors for Gaussian and RMSD clustering defaults
 nprocs=1
 
-# set thrshold fmax for optimization (default=0.01)
+# optimization force threshold
 thr_fmax=0.002
 
-#maximum iteration for optimization
+# maximum optimization iterations
 maxiter=50000
 
-# number of fold for conformer generation
+# conformer sampling controls
 nfold=2
-# to pick randomly extra conformer
 npick=0
-
-# to scale number of conformers
 nscale=10
 
-$PYTHON_DIR/python $ligPrep_DIR/runConfGen.py $struct_dir $add_hydrogen $caculator_type\
-	$optimization_method $optimization_conf $optimization_lig $pre_optimization_lig $genconformer\
-       	$nprocs $thr_fmax $maxiter $ETKDG $num_conformers $max_attempts $prune_rms_thresh $opt_prune_rms_thresh $opt_prune_diffE_thresh $nfold $npick $nscale
+# optimized-conformer RMSD clustering controls
+cluster_nprocs=1
+cluster_chunk_size=4000
+cluster_linkage=complete
+organize_clusters=yes
+organize_mode=move
+summary_csv=cluster_summary.csv
 
+# verbose=yes keeps all folders/intermediates.
+# verbose=no exports <file_base>_output.sdf to this directory and removes the ligand work folder.
+verbose=yes
+
+"$PYTHON_DIR/python" "$ligPrep_DIR/runConfGen.py" \
+"$struct_dir" \
+"$add_hydrogen" \
+"$caculator_type" \
+"$optimization_method" \
+"$optimization_conf" \
+"$optimization_lig" \
+"$pre_optimization_lig" \
+"$genconformer" \
+"$nprocs" \
+"$thr_fmax" \
+"$maxiter" \
+"$ETKDG" \
+"$num_conformers" \
+"$max_attempts" \
+"$prune_rms_thresh" \
+"$opt_prune_rms_thresh" \
+"$opt_prune_diffE_thresh" \
+"$nfold" \
+"$npick" \
+"$nscale" \
+"$cluster_nprocs" \
+"$cluster_chunk_size" \
+"$cluster_linkage" \
+"$organize_clusters" \
+"$organize_mode" \
+"$summary_csv" \
+"$verbose"
 
