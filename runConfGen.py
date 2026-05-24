@@ -184,7 +184,14 @@ def _export_final_sdf_and_cleanup(WORK_DIR, file_base, prefix):
     shutil.copy2(final_sdf, export_sdf)
     print(f"Compact output written to: {export_sdf}")
 
-    shutil.rmtree(WORK_DIR)
+    for attempt in range(3):
+        try:
+            shutil.rmtree(WORK_DIR)
+            break
+        except OSError:
+            if attempt == 2:
+                raise
+            time.sleep(0.2)
     print(f"Removed work directory because verbose=no: {WORK_DIR}")
 
     return export_sdf
@@ -300,8 +307,8 @@ def runConfGen(file_name):
     if pre_optimization_lig:
         print("Pre-Optimization process.. before confromer generations")
         e = lig.geomOptimization()
-        pre_e_file = open("%s/pre_%s%s_energy.txt"%(WORK_DIR, prefix, file_base) , "w")
-        print(e, " eV", file=pre_e_file)
+        with open("%s/pre_%s%s_energy.txt"%(WORK_DIR, prefix, file_base) , "w") as pre_e_file:
+            print(e, " eV", file=pre_e_file)
         lig.writeRWMol2File("%s/pre_%s%s.sdf"%(WORK_DIR, prefix, file_base), Energy=e)
 
     if genconformer:
@@ -315,8 +322,8 @@ def runConfGen(file_name):
         # geometry optimizaton for ligand
         if  optimization_lig:
             e = lig.geomOptimization()
-            e_file = open("%s/global_%s%s_energy.txt"%(WORK_DIR, prefix, file_base) , "w")
-            print(e, " eV", file=e_file)
+            with open("%s/global_%s%s_energy.txt"%(WORK_DIR, prefix, file_base) , "w") as e_file:
+                print(e, " eV", file=e_file)
             lig.writeRWMol2File("%s/global_%s%s.sdf"%(WORK_DIR, prefix, file_base), Energy=e)
 
     if not verbose:

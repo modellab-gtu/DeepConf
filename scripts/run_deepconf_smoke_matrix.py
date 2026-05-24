@@ -73,13 +73,22 @@ def read_sdf_summary(path):
     }
 
 
-def expected_output(case_dir, file_base, case):
+def expected_output(case_dir, file_base, case, add_hydrogen=False):
     if not case["verbose"]:
         return case_dir / f"{file_base}_output.sdf"
 
     work_dir = case_dir / file_base
     if not case["genconformer"]:
-        return work_dir / f"global_opt_{file_base}.sdf"
+        prefix = ""
+        if add_hydrogen:
+            prefix += "addH_"
+        if (
+            case["optimization_lig"]
+            or case["optimization_conf"]
+            or case["pre_optimization_lig"]
+        ):
+            prefix += "opt_"
+        return work_dir / f"global_{prefix}{file_base}.sdf"
 
     if case["optimization_conf"]:
         return work_dir / "opt_picked_confs" / f"{file_base}_output.sdf"
@@ -246,7 +255,7 @@ def run_case(args, case, source_sdf, file_base, output_root):
     log_path = case_dir / "run.log"
     log_path.write_text(proc.stdout)
 
-    expected_sdf = expected_output(case_dir, file_base, case)
+    expected_sdf = expected_output(case_dir, file_base, case, add_hydrogen=args.add_hydrogen)
     sdf_summary = read_sdf_summary(expected_sdf)
     work_dir = case_dir / file_base
 
