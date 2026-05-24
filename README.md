@@ -143,11 +143,11 @@ Common workflows:
 | Option | Current default | Description |
 | --- | --- | --- |
 | `caculator_type` | `aimnet2` | Calculator choice. The variable name is intentionally kept as `caculator_type` for backward compatibility. Supported values include `ani1x`, `ani1ccx`, `ani2x`, `aimnet2`, `nequip`, `g16`, and `uff`. |
-| `calculator_model` | blank | Optional model name or model path. For AIMNet2, leave blank to use `aimnet2` or set a specific AIMNet model name. For NequIP, set this to a deployed `.pth` model path or a newer compiled model path. |
+| `calculator_model` | blank | Optional model name or model path. For AIMNet2, leave blank to use `aimnet2` or set a specific AIMNet model name. For NequIP, leave blank to use the bundled `all_NNP_MODELS/G_NequIP.pth`, or set this to a deployed `.pth` model path or a newer compiled model path. |
 | `calculator_charge` | blank | AIMNet2 total molecular charge. Leave blank to infer the formal charge from the loaded SDF/RDKit molecule. Set an integer such as `-1`, `0`, or `1` to override. |
 | `calculator_multiplicity` | `1` | AIMNet2 spin multiplicity. |
 | `calculator_device` | `auto` | Device for NequIP. `auto` selects CUDA when PyTorch sees a GPU, otherwise CPU. You can force `cpu` or `cuda`. |
-| `nequip_chemical_symbols` | blank | Optional NequIP species mapping. Use `identity` for models whose atom-type names match chemical symbols, or provide a comma-separated list/JSON mapping if required by the model. |
+| `nequip_chemical_symbols` | blank | Optional NequIP species mapping. For bundled NequIP models, blank automatically uses identity mapping. Use `identity` for other models whose atom-type names match chemical symbols, or provide a comma-separated list/JSON mapping if required by the model. |
 | `nprocs` | `64` | Number of processors for Gaussian jobs. It does not make ANI, AIMNet2, or NequIP single-structure optimization run on 64 CPU cores. Use GPU testing for ML-calculator speed evaluation. |
 
 Calculator notes:
@@ -187,12 +187,10 @@ To use the default bundled NequIP model, edit `runConfGen.sh` like this:
 
 ```bash
 caculator_type="nequip"
-calculator_model="$model_dir/$nequip_model_file"
 calculator_device=auto
-nequip_chemical_symbols="identity"
 ```
 
-To use another bundled model, change only `nequip_model_file`, for example:
+When `caculator_type="nequip"` and `calculator_model` is blank, DeepConf uses `all_NNP_MODELS/G_NequIP.pth` automatically and applies identity species mapping for the bundled model. To use another bundled model, set `nequip_model_file` and `calculator_model`, for example:
 
 ```bash
 nequip_model_file="M_NequIP_smdW.pth"
