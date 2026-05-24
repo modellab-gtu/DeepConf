@@ -148,6 +148,9 @@ Common workflows:
 | `calculator_multiplicity` | `1` | AIMNet2 and Gaussian16 spin multiplicity. |
 | `calculator_device` | `auto` | Device for NequIP. `auto` selects CUDA when PyTorch sees a GPU, otherwise CPU. You can force `cpu` or `cuda`. |
 | `nequip_chemical_symbols` | blank | Optional NequIP species mapping. For bundled NequIP models, blank automatically uses identity mapping. Use `identity` for other models whose atom-type names match chemical symbols, or provide a comma-separated list/JSON mapping if required by the model. |
+| `g16_mem` | `4GB` | Gaussian16 memory setting passed to ASE Gaussian as `mem`. |
+| `g16_level` | `WB97XD` | Gaussian16 functional/method setting passed to ASE Gaussian as `xc`. |
+| `g16_basis` | `6-311++G(3df,3pd)` | Gaussian16 basis-set setting passed to ASE Gaussian as `basis`. |
 | `nprocs` | `64` | Number of processors for Gaussian jobs. It does not make ANI, AIMNet2, or NequIP single-structure optimization run on 64 CPU cores. Use GPU testing for ML-calculator speed evaluation. |
 
 Calculator notes:
@@ -155,7 +158,7 @@ Calculator notes:
 - ANI-family choices use TorchANI: `ani1x`, `ani1ccx`, or `ani2x`.
 - AIMNet2 uses the AIMNet ASE calculator. Charge is inferred from formal charges in the SDF unless `calculator_charge` or `DEEPCONF_AIMNET_CHARGE` is set.
 - NequIP uses the ASE `NequIPCalculator`. Older `.pth` or `.pt` models are loaded through the deployed-model path. Raw NequIP cohesive energies are converted back to total eV energies before writing SDF/CSV `Energy` values.
-- `g16` uses Gaussian16 through ASE and uses `nprocs` for `nprocshared`. Charge is inferred from formal charges in the SDF unless `calculator_charge` or `DEEPCONF_G16_CHARGE` is set, and `calculator_multiplicity` is passed as the Gaussian multiplicity.
+- `g16` uses Gaussian16 through ASE and uses `nprocs` for `nprocshared`. Charge is inferred from formal charges in the SDF unless `calculator_charge` or `DEEPCONF_G16_CHARGE` is set, `calculator_multiplicity` is passed as the Gaussian multiplicity, and `g16_mem`, `g16_level`, and `g16_basis` control the Gaussian memory, method, and basis settings.
 - `uff` is only for RDKit/MM energy handling in supported paths. Do not use `uff` with `optimization_conf=yes`.
 
 ### Bundled NequIP Models

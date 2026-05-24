@@ -52,6 +52,9 @@ parser.add_argument("calculator_charge", nargs="?", default="")
 parser.add_argument("calculator_mult", nargs="?", default="1")
 parser.add_argument("calculator_device", nargs="?", default="auto")
 parser.add_argument("nequip_chemical_symbols", nargs="?", default="")
+parser.add_argument("g16_mem", nargs="?", default="4GB")
+parser.add_argument("g16_level", nargs="?", default="WB97XD")
+parser.add_argument("g16_basis", nargs="?", default="6-311++G(3df,3pd)")
 
 
 def calcFuncRunTime(func):
@@ -312,17 +315,19 @@ def _export_final_sdf_and_cleanup(WORK_DIR, file_base, prefix):
     return export_sdf
 
 
-def setG16calculator(lig, file_base, label, WORK_DIR, charge=0, mult=1):
+def setG16calculator(lig, file_base, label, WORK_DIR, charge=0, mult=1,
+                     mem="4GB", level="WB97XD", basis="6-311++G(3df,3pd)"):
     lig.setG16Calculator(
             label="%s/g16_%s/%s"%(WORK_DIR, label, file_base),
             chk="",
             nprocs=nprocs,
-            xc="WB97X",
-            basis="6-31G*",
+            xc=level,
+            basis=basis,
             scf="XQC, maxconventionalcycles=100",
             extra="nosymm",
             charge=charge,
             mult=mult,
+            mem=mem,
 
             )
     return lig
@@ -413,6 +418,9 @@ def runConfGen(file_name):
                 env_name="DEEPCONF_G16_CHARGE",
             ),
             mult=calculator_mult,
+            mem=g16_mem,
+            level=g16_level,
+            basis=g16_basis,
         )
     elif "uff" in calculator_type.lower():
         if optimization_conf:
@@ -528,6 +536,9 @@ if __name__ == "__main__":
     calculator_mult = int(float(args.calculator_mult))
     calculator_device = args.calculator_device
     nequip_chemical_symbols = args.nequip_chemical_symbols
+    g16_mem = args.g16_mem
+    g16_level = args.g16_level
+    g16_basis = args.g16_basis
 
     if not verbose:
         from rdkit import RDLogger
