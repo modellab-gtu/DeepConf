@@ -47,6 +47,11 @@ parser.add_argument("organize_clusters", nargs="?", default="yes")
 parser.add_argument("organize_mode", nargs="?", default="move")
 parser.add_argument("summary_csv", nargs="?", default="cluster_summary.csv")
 parser.add_argument("verbose", nargs="?", default="yes")
+parser.add_argument("calculator_model", nargs="?", default="")
+parser.add_argument("calculator_charge", nargs="?", default="")
+parser.add_argument("calculator_mult", nargs="?", default="1")
+parser.add_argument("calculator_device", nargs="?", default="auto")
+parser.add_argument("nequip_chemical_symbols", nargs="?", default="")
 
 
 def calcFuncRunTime(func):
@@ -67,6 +72,69 @@ def getBoolStr(string):
     else:
         print("%s is bad input!!! Must be Yes/No or True/False" %string)
         sys.exit(1)
+
+
+def _value_or_env(value, env_name, default=""):
+    if value is None or str(value).strip() == "":
+        return os.environ.get(env_name, default)
+    return value
+
+
+def _parse_nequip_chemical_symbols(value):
+    value = _value_or_env(value, "DEEPCONF_NEQUIP_CHEMICAL_SYMBOLS", "")
+    value = str(value).strip()
+    if value == "":
+        return None
+    if value.lower() in ("true", "yes", "identity"):
+        return True
+
+    try:
+        import json
+        return json.loads(value)
+    except Exception:
+        pass
+
+    if ":" in value:
+        return dict(
+            item.split(":", 1)
+            for item in value.split(",")
+            if item.strip()
+        )
+
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def _formal_charge_from_ligand(lig):
+    mol = getattr(lig, "rw_mol", None)
+    if mol is None:
+        return 0
+
+    for prop_name in (
+        "Charge",
+        "charge",
+        "TotalCharge",
+        "total_charge",
+        "FormalCharge",
+        "formal_charge",
+    ):
+        if mol.HasProp(prop_name):
+            try:
+                return int(float(mol.GetProp(prop_name)))
+            except Exception:
+                pass
+
+    return int(Chem.GetFormalCharge(mol))
+
+
+def _parse_calculator_charge(value, lig):
+    value = _value_or_env(value, "DEEPCONF_AIMNET_CHARGE", "")
+    if value is None or str(value).strip() == "":
+        charge = _formal_charge_from_ligand(lig)
+        if verbose:
+            print(f"Using inferred molecular charge for AIMNet2: {charge}")
+        return charge
+
+    return int(float(value))
 
 
 def _read_sdf_energy_for_export(sdf_path, default=float("inf")):
@@ -184,7 +252,14 @@ def _export_final_sdf_and_cleanup(WORK_DIR, file_base, prefix):
     shutil.copy2(final_sdf, export_sdf)
     print(f"Compact output written to: {export_sdf}")
 
-    shutil.rmtree(WORK_DIR)
+    for attempt in range(3):
+        try:
+            shutil.rmtree(WORK_DIR)
+            break
+        except OSError:
+            if attempt == 2:
+                raise
+            time.sleep(0.2)
     print(f"Removed work directory because verbose=no: {WORK_DIR}")
 
     return export_sdf
@@ -273,8 +348,9 @@ def runConfGen(file_name):
     lig.setOptMethod(optimization_method)
     #  lig.writeRWMol2File("test/test.xyz")
 
-    if "ani2x" in calculator_type.lower():
-        lig.setANI2XCalculator()
+    calculator_key = calculator_type.lower().replace("-", "").replace("_", "")
+    if calculator_key in ("ani1x", "ani1ccx", "ani2x"):
+        lig.setANICalculator(calculator_key)
     elif "g16" in calculator_type.lower():
         lig = setG16calculator(lig, file_base, label="calculation", WORK_DIR=WORK_DIR)
     elif "uff" in calculator_type.lower():
@@ -283,6 +359,26 @@ def runConfGen(file_name):
             sys.exit(1)
         else:
             mmCalculator=True
+    elif "aimnet" in calculator_type.lower():
+        default_model = "aimnet2"
+        if calculator_type.lower() not in ("aimnet", "aimnet2"):
+            default_model = calculator_type
+        model_name = _value_or_env(calculator_model, "DEEPCONF_AIMNET_MODEL", default_model)
+        lig.setAIMNet2Calculator(
+            model_name=model_name,
+            charge=_parse_calculator_charge(calculator_charge, lig),
+            mult=calculator_mult,
+        )
+    elif "nequip" in calculator_type.lower():
+        model_path = _value_or_env(calculator_model, "DEEPCONF_NEQUIP_MODEL", "")
+        lig.setNequIPCalculator(
+            model_path=model_path,
+            device=calculator_device,
+            chemical_symbols=_parse_nequip_chemical_symbols(nequip_chemical_symbols),
+        )
+    else:
+        print(f"Unsupported calculator_type: {calculator_type}")
+        sys.exit(1)
 
     if addH:
         if mmCalculator:
@@ -300,8 +396,8 @@ def runConfGen(file_name):
     if pre_optimization_lig:
         print("Pre-Optimization process.. before confromer generations")
         e = lig.geomOptimization()
-        pre_e_file = open("%s/pre_%s%s_energy.txt"%(WORK_DIR, prefix, file_base) , "w")
-        print(e, " eV", file=pre_e_file)
+        with open("%s/pre_%s%s_energy.txt"%(WORK_DIR, prefix, file_base) , "w") as pre_e_file:
+            print(e, " eV", file=pre_e_file)
         lig.writeRWMol2File("%s/pre_%s%s.sdf"%(WORK_DIR, prefix, file_base), Energy=e)
 
     if genconformer:
@@ -315,8 +411,8 @@ def runConfGen(file_name):
         # geometry optimizaton for ligand
         if  optimization_lig:
             e = lig.geomOptimization()
-            e_file = open("%s/global_%s%s_energy.txt"%(WORK_DIR, prefix, file_base) , "w")
-            print(e, " eV", file=e_file)
+            with open("%s/global_%s%s_energy.txt"%(WORK_DIR, prefix, file_base) , "w") as e_file:
+                print(e, " eV", file=e_file)
             lig.writeRWMol2File("%s/global_%s%s.sdf"%(WORK_DIR, prefix, file_base), Energy=e)
 
     if not verbose:
@@ -358,6 +454,11 @@ if __name__ == "__main__":
     organize_mode = args.organize_mode.lower()
     summary_csv = args.summary_csv
     verbose = getBoolStr(args.verbose)
+    calculator_model = args.calculator_model
+    calculator_charge = args.calculator_charge
+    calculator_mult = int(float(args.calculator_mult))
+    calculator_device = args.calculator_device
+    nequip_chemical_symbols = args.nequip_chemical_symbols
 
     if not verbose:
         from rdkit import RDLogger

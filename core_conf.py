@@ -846,13 +846,85 @@ class confGen:
         )
 
     def setANI2XCalculator(self):
+        self.setANICalculator("ani2x")
+
+    def setANICalculator(self, model_name="ani2x"):
         import torchani
         import torch
         if getattr(self, "verbose", True):
             print("Number of CUDA devices: ", torch.cuda.device_count())
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-        self.calculator = torchani.models.ANI2x().to(device).ase()
+        model_key = model_name.lower().replace("-", "").replace("_", "")
+        model_factories = {
+            "ani1x": torchani.models.ANI1x,
+            "ani1ccx": torchani.models.ANI1ccx,
+            "ani2x": torchani.models.ANI2x,
+        }
+        if model_key not in model_factories:
+            raise ValueError("ANI model must be one of ani1x, ani1ccx, or ani2x")
+
+        self.calculator = model_factories[model_key]().to(device).ase()
+
+    def setAIMNet2Calculator(self, model_name="aimnet2", charge=0, mult=1):
+        try:
+            from aimnet.calculators import AIMNet2ASE
+        except ImportError:
+            from aimnet.calculators.aimnet2ase import AIMNet2ASE
+
+        self.calculator = AIMNet2ASE(model_name, charge=charge, mult=mult)
+
+    def setNequIPCalculator(self, model_path, device="auto", chemical_symbols=None):
+        import inspect
+        import torch
+        from nequip.ase import NequIPCalculator
+
+        if device in ("", "auto", None):
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+
+        if not model_path:
+            raise ValueError("NequIP calculator requires a compiled/deployed model path")
+
+        if getattr(self, "verbose", True):
+            print(f"Using NequIP device: {device}")
+
+        model_ext = str(model_path).lower()
+        prefer_deployed = model_ext.endswith((".pth", ".pt"))
+
+        if prefer_deployed and hasattr(NequIPCalculator, "from_deployed_model"):
+            method = NequIPCalculator.from_deployed_model
+        elif hasattr(NequIPCalculator, "from_compiled_model"):
+            method = NequIPCalculator.from_compiled_model
+        elif hasattr(NequIPCalculator, "from_deployed_model"):
+            method = NequIPCalculator.from_deployed_model
+        else:
+            raise AttributeError("NequIPCalculator has no supported model-loading method")
+
+        kwargs = {}
+        params = inspect.signature(method).parameters
+        if "compile_path" in params:
+            kwargs["compile_path"] = model_path
+        elif "model_path" in params:
+            kwargs["model_path"] = model_path
+        else:
+            kwargs[next(iter(params))] = model_path
+
+        if "device" in params:
+            kwargs["device"] = device
+
+        if chemical_symbols:
+            if chemical_symbols is True and "chemical_species_to_atom_type_map" in params:
+                kwargs["chemical_species_to_atom_type_map"] = True
+            elif chemical_symbols is True:
+                pass
+            elif "chemical_symbols" in params:
+                kwargs["chemical_symbols"] = chemical_symbols
+            elif "chemical_species_to_atom_type_map" in params:
+                kwargs["chemical_species_to_atom_type_map"] = chemical_symbols
+            elif "species_to_type_name" in params:
+                kwargs["species_to_type_name"] = chemical_symbols
+
+        self.calculator = method(**kwargs)
 
     def _calcSPEnergy(self, mol, conformerId):
 
