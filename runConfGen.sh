@@ -40,10 +40,10 @@ caculator_type="ani2x"
 #   Leave calculator_charge blank to infer the SDF formal charge, or set an override.
 # - NequIP: set calculator_model to the deployed .pth path for older NequIP,
 #   or to the compiled model path for newer NequIP.
-#   For the local Modeller Lab NequIP models, set caculator_type="nequip",
+#   For the bundled Modeller Lab NequIP models, set caculator_type="nequip",
 #   then set calculator_model="$model_dir/$nequip_model_file" and
 #   nequip_chemical_symbols="identity".
-model_dir="$HOME/deepQM/all_NNP_MODELS"
+model_dir="$ligPrep_DIR/all_NNP_MODELS"
 nequip_model_file="G_NequIP.pth"
 # Other available local examples:
 # nequip_model_file="G_NequIP_smdW.pth"
