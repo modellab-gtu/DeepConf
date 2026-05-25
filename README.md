@@ -103,8 +103,11 @@ Install PyTorch (CPU build) and all torch-dependent packages via pip:
 
 ```bash
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
-pip install "torchani==2.7.1" auto3d aimnet "nequip==0.6.1"
+pip install "torchani==2.7.1" auto3d "aimnet==0.0.1" "nequip==0.6.1"
+pip install "setuptools==80.10.2"
 ```
+
+`aimnet` must be pinned to `0.0.1` — newer versions pull in a different PyTorch build and replace the one installed above. `setuptools` must be pinned to `80.10.2` because `auto3d` imports `pkg_resources`, which was removed in setuptools 81+.
 
 Verify the environment:
 
@@ -144,9 +147,12 @@ conda install -y -c psi4 dftd3
 Install PyTorch with the CUDA 12.4 wheel, then all torch-dependent packages via pip:
 
 ```bash
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
-pip install "torchani==2.7.1" auto3d aimnet "nequip==0.6.1"
+pip install torch==2.6.0+cu124 torchvision==0.21.0+cu124 --index-url https://download.pytorch.org/whl/cu124
+pip install "torchani==2.7.1" auto3d "aimnet==0.0.1" "nequip==0.6.1"
+pip install "setuptools==80.10.2"
 ```
+
+`torch` and `torchvision` are pinned to `2.6.0+cu124` and `aimnet` to `0.0.1` — newer aimnet versions replace the installed PyTorch with an incompatible build. `setuptools` must be pinned to `80.10.2` because `auto3d` imports `pkg_resources`, which was removed in setuptools 81+.
 
 Verify the environment:
 
@@ -156,7 +162,7 @@ python -c "import torch; print(torch.__version__); print('CUDA available:', torc
 python -m py_compile runConfGen.py core_conf.py
 ```
 
-`torch.__version__` should show `2.12.0+cu124` or newer and `torch.cuda.is_available()` should return `True` if an NVIDIA GPU and driver are present.
+`torch.__version__` should show `2.6.0+cu124` and `torch.cuda.is_available()` should return `True` if an NVIDIA GPU and driver are present.
 
 ### Clean WSL Installation
 
