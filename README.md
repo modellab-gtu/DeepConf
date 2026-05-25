@@ -92,18 +92,24 @@ conda create -y --name ANI_AIMNet_NeQuIP python=3.11
 conda activate ANI_AIMNet_NeQuIP
 ```
 
-Install all dependencies. PyTorch installed by conda-forge defaults to the CPU build:
+Install non-PyTorch dependencies via conda. **Do not** install `pytorch`, `torchani`, or `auto3d` through conda — conda-forge pulls in its own `libtorch` shared libraries that will conflict with the pip-installed PyTorch below:
 
 ```bash
-conda install -y -c conda-forge numpy pandas tqdm rdkit openbabel ase pytorch torchani dftd3-python auto3d
+conda install -y -c conda-forge numpy pandas tqdm rdkit openbabel ase dftd3-python
 conda install -y -c psi4 dftd3
-pip install aimnet nequip==0.6.1
+```
+
+Install PyTorch (CPU build) and all torch-dependent packages via pip:
+
+```bash
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+pip install "torchani==2.7.1" auto3d aimnet "nequip==0.6.1"
 ```
 
 Verify the environment:
 
 ```bash
-python -c "import numpy, pandas, rdkit, ase, openbabel, torch, torchani; print('DeepConf core imports OK')"
+python -c "import numpy, pandas, rdkit, ase, openbabel, torch, torchani, Auto3D, aimnet, nequip; print('DeepConf imports OK')"
 python -c "import torch; print(torch.__version__); print('CUDA available:', torch.cuda.is_available())"
 python -m py_compile runConfGen.py core_conf.py
 ```
@@ -128,25 +134,29 @@ conda create -y --name ANI_AIMNet_NeQuIP python=3.11
 conda activate ANI_AIMNet_NeQuIP
 ```
 
-Install non-PyTorch dependencies via conda, then PyTorch and the ML calculators via pip with the CUDA 12.4 wheel. Installing PyTorch through conda-forge would give a CPU or mismatched CUDA build, so it is omitted from the conda step here:
+Install non-PyTorch dependencies via conda. As with the CPU path, do not install `pytorch`, `torchani`, or `auto3d` through conda:
 
 ```bash
-conda install -y -c conda-forge numpy pandas tqdm rdkit openbabel ase dftd3-python auto3d
+conda install -y -c conda-forge numpy pandas tqdm rdkit openbabel ase dftd3-python
 conda install -y -c psi4 dftd3
+```
+
+Install PyTorch with the CUDA 12.4 wheel, then all torch-dependent packages via pip:
+
+```bash
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
-pip install torchani aimnet nequip==0.6.1
+pip install "torchani==2.7.1" auto3d aimnet "nequip==0.6.1"
 ```
 
 Verify the environment:
 
 ```bash
-python -c "import numpy, pandas, rdkit, ase, openbabel, torch, torchani; print('DeepConf core imports OK')"
+python -c "import numpy, pandas, rdkit, ase, openbabel, torch, torchani, Auto3D, aimnet, nequip; print('DeepConf imports OK')"
 python -c "import torch; print(torch.__version__); print('CUDA available:', torch.cuda.is_available())"
-python -c "import torchani, aimnet, nequip; print('ML calculators OK')"
 python -m py_compile runConfGen.py core_conf.py
 ```
 
-`torch.__version__` should show `2.6.0+cu124` and `torch.cuda.is_available()` should return `True` if an NVIDIA GPU and driver are present.
+`torch.__version__` should show `2.12.0+cu124` or newer and `torch.cuda.is_available()` should return `True` if an NVIDIA GPU and driver are present.
 
 ### Clean WSL Installation
 
