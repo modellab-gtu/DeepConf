@@ -74,6 +74,96 @@ For Gaussian16 support, make sure the `g16` command is available in your shell e
 
 If the installation commands above do not reproduce the working environment on your machine, compare against [`pip-list-ANI_AIMNet_NeQuIP.txt`](pip-list-ANI_AIMNet_NeQuIP.txt). It records a known working `pip list` for troubleshooting, but it is not intended to be a strict lock file.
 
+### Clean Linux Installation – CPU Only
+
+Start from a clean shell with Conda available. If Miniconda is not yet installed, download and install it from the [Miniconda page](https://docs.conda.io/en/latest/miniconda.html), then restart the shell or source it manually:
+
+```bash
+source "$HOME/miniconda3/etc/profile.d/conda.sh"
+```
+
+Clone the repository and create the environment:
+
+```bash
+git clone https://github.com/modellab-gtu/DeepConf.git
+cd DeepConf
+
+conda create -y --name ANI_AIMNet_NeQuIP python=3.11
+conda activate ANI_AIMNet_NeQuIP
+```
+
+Install non-PyTorch dependencies via conda. **Do not** install `pytorch`, `torchani`, or `auto3d` through conda — conda-forge pulls in its own `libtorch` shared libraries that will conflict with the pip-installed PyTorch below:
+
+```bash
+conda install -y -c conda-forge numpy pandas tqdm rdkit openbabel ase dftd3-python
+conda install -y -c psi4 dftd3
+```
+
+Install PyTorch (CPU build) and all torch-dependent packages via pip:
+
+```bash
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+pip install "torchani==2.7.1" auto3d "aimnet==0.0.1" "nequip==0.6.1"
+pip install "setuptools==80.10.2"
+```
+
+`aimnet` must be pinned to `0.0.1` — newer versions pull in a different PyTorch build and replace the one installed above. `setuptools` must be pinned to `80.10.2` because `auto3d` imports `pkg_resources`, which was removed in setuptools 81+.
+
+Verify the environment:
+
+```bash
+python -c "import numpy, pandas, rdkit, ase, openbabel, torch, torchani, Auto3D, aimnet, nequip; print('DeepConf imports OK')"
+python -c "import torch; print(torch.__version__); print('CUDA available:', torch.cuda.is_available())"
+python -m py_compile runConfGen.py core_conf.py
+```
+
+`torch.cuda.is_available()` will be `False` on a CPU-only machine; this is expected. ANI, AIMNet2, and NequIP calculations will run on CPU, which is fine for small molecules and testing but significantly slower for production runs.
+
+### Clean Linux Installation – CPU + GPU (CUDA 12.4)
+
+This path installs PyTorch with bundled CUDA 12.4 libraries via the official PyTorch pip wheel. No system CUDA installation is required for PyTorch itself, but on HPC clusters with a module system load the matching CUDA module before running to ensure driver compatibility:
+
+```bash
+module load cuda/12.4
+```
+
+Clone the repository and create the environment:
+
+```bash
+git clone https://github.com/modellab-gtu/DeepConf.git
+cd DeepConf
+
+conda create -y --name ANI_AIMNet_NeQuIP python=3.11
+conda activate ANI_AIMNet_NeQuIP
+```
+
+Install non-PyTorch dependencies via conda. As with the CPU path, do not install `pytorch`, `torchani`, or `auto3d` through conda:
+
+```bash
+conda install -y -c conda-forge numpy pandas tqdm rdkit openbabel ase dftd3-python
+conda install -y -c psi4 dftd3
+```
+
+Install PyTorch with the CUDA 12.4 wheel, then all torch-dependent packages via pip:
+
+```bash
+pip install torch==2.6.0+cu124 torchvision==0.21.0+cu124 --index-url https://download.pytorch.org/whl/cu124
+pip install "torchani==2.7.1" auto3d "aimnet==0.0.1" "nequip==0.6.1"
+pip install "setuptools==80.10.2"
+```
+
+`torch` and `torchvision` are pinned to `2.6.0+cu124` and `aimnet` to `0.0.1` — newer aimnet versions replace the installed PyTorch with an incompatible build. `setuptools` must be pinned to `80.10.2` because `auto3d` imports `pkg_resources`, which was removed in setuptools 81+.
+
+Verify the environment:
+
+```bash
+python -c "import numpy, pandas, rdkit, ase, openbabel, torch, torchani, Auto3D, aimnet, nequip; print('DeepConf imports OK')"
+python -c "import torch; print(torch.__version__); print('CUDA available:', torch.cuda.is_available())"
+python -m py_compile runConfGen.py core_conf.py
+```
+
+`torch.__version__` should show `2.6.0+cu124` and `torch.cuda.is_available()` should return `True` if an NVIDIA GPU and driver are present.
+
 ### Clean WSL Installation
 
 For Windows users, use WSL2 with a Linux distribution such as Ubuntu. Keep the repository and run folders inside the WSL Linux filesystem, for example under `$HOME/projects`, instead of running from a Windows path such as `/mnt/c/Users/.../Documents/GitHub`. This avoids slow file I/O and path issues.
