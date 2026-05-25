@@ -1162,7 +1162,8 @@ class confGen:
                     )
 
         def write_frame():
-            write_xyz_frame(dyn.nsteps)
+            if dyn.nsteps > 0:
+                write_xyz_frame(dyn.nsteps)
 
         write_xyz_frame(0)
         dyn.attach(write_frame, interval=sample_interval)
