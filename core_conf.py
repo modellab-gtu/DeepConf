@@ -456,10 +456,9 @@ class confGen:
 
                 frame_symbols = list(atoms.get_chemical_symbols())
                 if frame_symbols != template_symbols:
-                    print(
-                        f"Warning: external trajectory frame {frame_id} atom symbols "
-                        "do not match the input topology. Using frame coordinates by "
-                        "atom index with the input molecule topology."
+                    raise ValueError(
+                        f"External trajectory frame {frame_id} atom symbols/order do not "
+                        "match the input molecule topology."
                     )
                 conformerIds.append(
                     self._addConformerFromPositions(mol, atoms.get_positions())

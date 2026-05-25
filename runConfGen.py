@@ -371,6 +371,7 @@ def setGenConformers(lig, out_file_path, mmCalculator):
                 opt_prune_diffE_thresh=opt_prune_diffE_thresh,
                 nfold=nfold,
                 npick=npick,
+                nscale=nscale,
                 cluster_nprocs=cluster_nprocs,
                 cluster_chunk_size=cluster_chunk_size,
                 cluster_linkage=cluster_linkage,
@@ -398,6 +399,7 @@ def setGenConformers(lig, out_file_path, mmCalculator):
 #  @calcFuncRunTime
 def runConfGen(file_name):
     "Starting ligand preparetion process... "
+    global sample_md, external_md_traj_file
     mol_path= "%s/%s"%(structure_dir, file_name)
 
     file_base = file_name.split(".")[0]
