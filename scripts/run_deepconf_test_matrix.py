@@ -733,9 +733,14 @@ def main():
         calc_root = args.output_root / calc
         calc_root.mkdir(exist_ok=True)
 
-        # Pre-generate SDF files
+        # Pre-generate SDF files for mol_pool + any molecules needed by init tests
         sdf_cache = {}
-        for mol_key, mol_info in mol_pool.items():
+        init_mol_keys = {cfg["molecule"] for cfg in INIT_TESTS.values()}
+        sdf_mol_pool = dict(mol_pool)
+        for k in init_mol_keys:
+            if k not in sdf_mol_pool and k in MOLECULE_LIBRARY:
+                sdf_mol_pool[k] = MOLECULE_LIBRARY[k]
+        for mol_key, mol_info in sdf_mol_pool.items():
             smiles = mol_info.get("smiles")
             if not smiles:
                 if args.input_sdf:
