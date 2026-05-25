@@ -74,6 +74,80 @@ For Gaussian16 support, make sure the `g16` command is available in your shell e
 
 If the installation commands above do not reproduce the working environment on your machine, compare against [`pip-list-ANI_AIMNet_NeQuIP.txt`](pip-list-ANI_AIMNet_NeQuIP.txt). It records a known working `pip list` for troubleshooting, but it is not intended to be a strict lock file.
 
+### Clean Linux Installation – CPU Only
+
+Start from a clean shell with Conda available. If Miniconda is not yet installed, download and install it from the [Miniconda page](https://docs.conda.io/en/latest/miniconda.html), then restart the shell or source it manually:
+
+```bash
+source "$HOME/miniconda3/etc/profile.d/conda.sh"
+```
+
+Clone the repository and create the environment:
+
+```bash
+git clone https://github.com/modellab-gtu/DeepConf.git
+cd DeepConf
+
+conda create -y --name ANI_AIMNet_NeQuIP python=3.11
+conda activate ANI_AIMNet_NeQuIP
+```
+
+Install all dependencies. PyTorch installed by conda-forge defaults to the CPU build:
+
+```bash
+conda install -y -c conda-forge numpy pandas tqdm rdkit openbabel ase pytorch torchani dftd3-python auto3d
+conda install -y -c psi4 dftd3
+pip install aimnet nequip==0.6.1
+```
+
+Verify the environment:
+
+```bash
+python -c "import numpy, pandas, rdkit, ase, openbabel, torch, torchani; print('DeepConf core imports OK')"
+python -c "import torch; print(torch.__version__); print('CUDA available:', torch.cuda.is_available())"
+python -m py_compile runConfGen.py core_conf.py
+```
+
+`torch.cuda.is_available()` will be `False` on a CPU-only machine; this is expected. ANI, AIMNet2, and NequIP calculations will run on CPU, which is fine for small molecules and testing but significantly slower for production runs.
+
+### Clean Linux Installation – CPU + GPU (CUDA 12.4)
+
+This path installs PyTorch with bundled CUDA 12.4 libraries via the official PyTorch pip wheel. No system CUDA installation is required for PyTorch itself, but on HPC clusters with a module system load the matching CUDA module before running to ensure driver compatibility:
+
+```bash
+module load cuda/12.4
+```
+
+Clone the repository and create the environment:
+
+```bash
+git clone https://github.com/modellab-gtu/DeepConf.git
+cd DeepConf
+
+conda create -y --name ANI_AIMNet_NeQuIP python=3.11
+conda activate ANI_AIMNet_NeQuIP
+```
+
+Install non-PyTorch dependencies via conda, then PyTorch and the ML calculators via pip with the CUDA 12.4 wheel. Installing PyTorch through conda-forge would give a CPU or mismatched CUDA build, so it is omitted from the conda step here:
+
+```bash
+conda install -y -c conda-forge numpy pandas tqdm rdkit openbabel ase dftd3-python auto3d
+conda install -y -c psi4 dftd3
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
+pip install torchani aimnet nequip==0.6.1
+```
+
+Verify the environment:
+
+```bash
+python -c "import numpy, pandas, rdkit, ase, openbabel, torch, torchani; print('DeepConf core imports OK')"
+python -c "import torch; print(torch.__version__); print('CUDA available:', torch.cuda.is_available())"
+python -c "import torchani, aimnet, nequip; print('ML calculators OK')"
+python -m py_compile runConfGen.py core_conf.py
+```
+
+`torch.__version__` should show `2.6.0+cu124` and `torch.cuda.is_available()` should return `True` if an NVIDIA GPU and driver are present.
+
 ### Clean WSL Installation
 
 For Windows users, use WSL2 with a Linux distribution such as Ubuntu. Keep the repository and run folders inside the WSL Linux filesystem, for example under `$HOME/projects`, instead of running from a Windows path such as `/mnt/c/Users/.../Documents/GitHub`. This avoids slow file I/O and path issues.
