@@ -125,6 +125,9 @@ bash runConfGen.sh
 | `add_hydrogen` | `no` | `yes` uses Open Babel to add missing hydrogens. Added H atoms are then relaxed with heavy atoms fixed using the selected calculator. |
 | `pre_optimization_lig` | `no` | `yes` optimizes the input ligand before conformer generation. Use this for a pre-relaxed starting geometry. |
 | `genconformer` | `yes` | `yes` generates conformers with RDKit. `no` skips conformer generation. |
+| `sample_md` | `no` | `yes` uses frames from `external_md_traj_file` as the conformer pool instead of generating RDKit conformers. The input ligand file is still used as the topology template. |
+| `external_md_traj_file` | blank | External MD trajectory file used when `sample_md=yes`. SDF trajectories are read with RDKit; other formats such as XYZ/PDB are read with ASE. Relative paths are checked from the run directory first, then from `struct_dir`. |
+| `run_md` | `no` | `yes` runs internal ASE Langevin MD with the selected calculator, writes `md_traj_file`, and then uses those frames as the conformer pool. |
 | `optimization_conf` | `yes` | `yes` optimizes the picked/generated conformers with the selected calculator. |
 | `optimization_lig` | `no` | `yes` optimizes only the original ligand when `genconformer=no`. |
 
@@ -135,6 +138,8 @@ Common workflows:
 | Ligand-only geometry optimization | `genconformer=no`, `optimization_lig=yes`, `optimization_conf=no`, `pre_optimization_lig=no` |
 | Conformer generation without pre-optimization | `genconformer=yes`, `pre_optimization_lig=no` |
 | Pre-optimization plus conformer generation | `genconformer=yes`, `pre_optimization_lig=yes` |
+| External MD trajectory sampling | `sample_md=yes`, `external_md_traj_file=<trajectory>`. `genconformer` can stay `yes`; RDKit embedding is skipped when `sample_md=yes`. |
+| Internal ASE MD sampling | `run_md=yes`. DeepConf runs MD with the selected calculator, writes an XYZ trajectory, and then follows the same MD-frame sampling path. |
 | Generate conformers but do not optimize picked conformers | `genconformer=yes`, `optimization_conf=no` |
 | Generate and optimize picked conformers | `genconformer=yes`, `optimization_conf=yes` |
 
@@ -210,6 +215,21 @@ The `all_NNP_MODELS/yml_file/` folder contains reference environment YAML files 
 | `thr_fmax` | `0.2` | Force convergence threshold passed to ASE optimizers as `fmax`. Lower values are stricter and slower. |
 | `maxiter` | `50000` | Maximum geometry-optimization steps. |
 
+### Internal ASE MD Sampling
+
+| Option | Current default | Description |
+| --- | --- | --- |
+| `run_md` | `no` | `yes` runs ASE Langevin MD before conformer sampling. No prior minimization is performed unless `pre_optimization_lig=yes` is also set. |
+| `md_temperature` | `400` | MD temperature in K. |
+| `md_steps` | `50000` | Number of MD steps. Total simulation time is `md_steps * md_timestep_fs`. |
+| `md_timestep_fs` | `1.0` | MD time step in fs. |
+| `md_sample_interval` | `500` | Write one trajectory frame every this many MD steps. For example, `100` saves frames at steps 0, 100, 200, etc. |
+| `md_friction` | `0.01` | ASE Langevin friction in inverse fs. |
+| `md_box_size` | `20.0` | Cubic cell length in Angstrom. The cell is non-periodic and used only to hold the molecule. |
+| `md_traj_file` | `md_sampled_confs.xyz` | Extended XYZ trajectory written under each ligand work folder and then used as the conformer source. Each frame header includes box vectors, MD step, time, total energy, potential energy, kinetic energy, and instantaneous temperature. Atom lines include coordinates and velocities. |
+
+Internal MD currently uses the selected ASE-compatible calculator, such as ANI, AIMNet2, or NequIP. Classical OpenMM/GROMACS/AMBER-style workflows are not part of this first internal MD implementation.
+
 ### RDKit Conformer Generation
 
 | Option | Current default | Description |
@@ -221,6 +241,8 @@ The `all_NNP_MODELS/yml_file/` folder contains reference environment YAML files 
 | `nfold` | `2` | Torsion-count scaling factor used when DeepConf estimates a minimum conformer count. |
 | `npick` | `0` | Number of random conformers picked from each initial cluster in addition to the minimum-energy conformer. `0` keeps only the minimum-energy conformer from each initial cluster. |
 | `nscale` | `10` | Additional scaling factor for the number of generated conformers based on torsion count. |
+
+When `sample_md=yes`, this RDKit embedding step is skipped. DeepConf loads each frame from `external_md_traj_file` as a conformer using the input molecule's RDKit topology, calculates energies, writes `confs_cluster_*` SDF files with `Energy` properties, and then continues through the same picked-conformer, optional optimization, RMSD clustering, and final-output pipeline.
 
 ### RMSD Clustering And Final Output
 

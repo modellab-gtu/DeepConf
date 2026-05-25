@@ -18,6 +18,20 @@ pre_optimization_lig=no
 # generate conformers (yes/no)
 genconformer=yes
 
+# use external MD trajectory frames instead of RDKit conformer generation (yes/no)
+sample_md=no
+external_md_traj_file=""
+
+# run internal ASE Langevin MD and use sampled frames as conformers (yes/no)
+run_md=no
+md_temperature=400
+md_steps=50000
+md_timestep_fs=1.0
+md_sample_interval=500
+md_friction=0.01
+md_box_size=20.0
+md_traj_file="md_sampled_confs.xyz"
+
 # conformer generator parameters. If ETKDG=yes, max_attempts and prune_rms_thresh are not used.
 ETKDG=yes
 num_conformers=50
@@ -128,4 +142,14 @@ verbose=yes
 "$nequip_chemical_symbols" \
 "$g16_mem" \
 "$g16_level" \
-"$g16_basis"
+"$g16_basis" \
+"$sample_md" \
+"$external_md_traj_file" \
+"$run_md" \
+"$md_temperature" \
+"$md_steps" \
+"$md_timestep_fs" \
+"$md_sample_interval" \
+"$md_friction" \
+"$md_box_size" \
+"$md_traj_file"

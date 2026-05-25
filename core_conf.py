@@ -384,6 +384,11 @@ class confGen:
     def _getClusterKmeansFromConfIds(self, conformerIds, dist_matrix, n_group):
 
         cluster_conf_id = defaultdict(list)
+        n_group = min(int(n_group), len(conformerIds))
+        if n_group <= 1:
+            cluster_conf_id[0] = list(conformerIds)
+            return cluster_conf_id
+
         whitened = whiten(dist_matrix)
         centroids, _ = kmeans(whitened, n_group)
         cluster, _ = vq(whitened,centroids)
@@ -391,6 +396,79 @@ class confGen:
             cluster_conf_id[key].append(value)
 
         return cluster_conf_id
+
+    def _addConformerFromPositions(self, mol, positions):
+        n_atoms = mol.GetNumAtoms()
+        if len(positions) != n_atoms:
+            raise ValueError(
+                f"External trajectory frame atom count mismatch: "
+                f"template has {n_atoms}, frame has {len(positions)}"
+            )
+
+        conf = Chem.Conformer(n_atoms)
+        for i, pos in enumerate(positions):
+            conf.SetAtomPosition(
+                i,
+                Point3D(float(pos[0]), float(pos[1]), float(pos[2]))
+            )
+
+        return mol.AddConformer(conf, assignId=True)
+
+    def _molWithExternalTrajectoryConformers(self, traj_file):
+        traj_file = os.path.expandvars(os.path.expanduser(str(traj_file)))
+        if not os.path.exists(traj_file):
+            raise FileNotFoundError(f"External MD trajectory file not found: {traj_file}")
+
+        mol = Chem.Mol(self.rw_mol)
+        mol.RemoveAllConformers()
+        conformerIds = []
+        ext = os.path.splitext(traj_file)[1].lower()
+        template_symbols = [atom.GetSymbol() for atom in mol.GetAtoms()]
+
+        if ext in (".sdf", ".sd"):
+            supplier = Chem.SDMolSupplier(traj_file, removeHs=False)
+            for frame_id, frame_mol in enumerate(supplier):
+                if frame_mol is None:
+                    print(f"Warning: skipping unreadable SDF frame {frame_id} in {traj_file}")
+                    continue
+                if frame_mol.GetNumConformers() == 0:
+                    print(f"Warning: skipping SDF frame {frame_id} with no coordinates")
+                    continue
+                frame_symbols = [atom.GetSymbol() for atom in frame_mol.GetAtoms()]
+                if frame_symbols != template_symbols:
+                    raise ValueError(
+                        f"External SDF frame {frame_id} atom symbols/order do not "
+                        "match the input molecule topology."
+                    )
+                positions = frame_mol.GetConformer().GetPositions()
+                conformerIds.append(self._addConformerFromPositions(mol, positions))
+        else:
+            from ase.io import read as ase_read
+
+            frames = ase_read(traj_file, index=":")
+            if not isinstance(frames, list):
+                frames = [frames]
+
+            for frame_id, atoms in enumerate(frames):
+                if len(atoms) == 0:
+                    print(f"Warning: skipping empty external trajectory frame {frame_id}")
+                    continue
+
+                frame_symbols = list(atoms.get_chemical_symbols())
+                if frame_symbols != template_symbols:
+                    raise ValueError(
+                        f"External trajectory frame {frame_id} atom symbols/order do not "
+                        "match the input molecule topology."
+                    )
+                conformerIds.append(
+                    self._addConformerFromPositions(mol, atoms.get_positions())
+                )
+
+        if len(conformerIds) == 0:
+            raise ValueError(f"No usable frames found in external MD trajectory: {traj_file}")
+
+        print(f"Loaded {len(conformerIds)} external MD trajectory frames from {traj_file}")
+        return mol, conformerIds
 
     def _readSDFEnergy(self, file_path, default=np.inf):
         try:
@@ -665,6 +743,8 @@ class confGen:
                          organize_clusters=True,
                          organize_mode="move",
                          summary_csv="cluster_summary.csv",
+                         sample_md=False,
+                         external_md_traj_file="",
                         ):
 
         import copy
@@ -676,11 +756,18 @@ class confGen:
         #  self.addHwithRD()
         print("Working on conformer generation process")
         mol = copy.deepcopy(self.rw_mol)
-        if numConfs == 0 or numConfs < self._getNumConfs(nfold, scaled=nscale):
+        if sample_md:
+            print("Using external MD trajectory frames instead of RDKit conformer generation")
+            mol, conformerIds = self._molWithExternalTrajectoryConformers(
+                external_md_traj_file
+            )
+        elif numConfs == 0 or numConfs < self._getNumConfs(nfold, scaled=nscale):
             numConfs = self._getNumConfs(nfold, scaled=nscale)
             print(f"Maximum number of conformers setting to {numConfs}")
 
-        if ETKDG:
+        if sample_md:
+            pass
+        elif ETKDG:
             ps = rdkit.Chem.rdDistGeom.ETKDGv3()
             conformerIds = list(rdkit.Chem.rdDistGeom.EmbedMultipleConfs(
                 mol,
@@ -712,8 +799,9 @@ class confGen:
         dist_matrix = getDistMatrix([mol], conformerIds)
 
         print("Processing k-means clustering")
+        n_group = min(self._getNumConfs(nfold, scaled=1), len(conformerIds))
         cluster_conf_id = self._getClusterKmeansFromConfIds(conformerIds, dist_matrix,
-                                           n_group=self._getNumConfs(nfold, scaled=1)
+                                           n_group=n_group
                                           )
         print("Calculating SP energies")
         minEConformerIDs = []
@@ -757,11 +845,12 @@ class confGen:
             minEConformerIDs.append(minEConformerID)
 
             # to pick conformer randomly
-            picked = False
-            while picked is False:
-                rndConformerIDs = sample(clustered_confIds, npick)
-                if minEConformerID not in rndConformerIDs:
-                    picked = True
+            n_random_pick = min(npick, max(0, len(clustered_confIds) - 1))
+            random_pool = [
+                conf_id for conf_id in clustered_confIds
+                if conf_id != minEConformerID
+            ]
+            rndConformerIDs = sample(random_pool, n_random_pick)
 
             picked_confs = [minEConformerID] + rndConformerIDs
             all_picked_confs += picked_confs
@@ -990,6 +1079,97 @@ class confGen:
             return float(calculator_energy) + self._nequip_atomic_self_energy(ase_atoms)
 
         return calculator_energy
+
+    def runAseMD(self, traj_file, temperature=400.0, steps=50000,
+                 timestep_fs=1.0, sample_interval=500, friction=0.01,
+                 box_size=20.0):
+        if self.calculator is None:
+            print("Error: Calculator not found. Please set any calculator")
+            sys.exit(1)
+
+        from ase import units
+        from ase.md.langevin import Langevin
+        from ase.md.velocitydistribution import (
+            MaxwellBoltzmannDistribution,
+            Stationary,
+            ZeroRotation,
+        )
+
+        sample_interval = int(sample_interval)
+        if sample_interval <= 0:
+            raise ValueError("md_sample_interval must be a positive integer")
+
+        traj_file = os.path.expandvars(os.path.expanduser(str(traj_file)))
+        traj_dir = os.path.dirname(traj_file)
+        if traj_dir and not os.path.exists(traj_dir):
+            os.makedirs(traj_dir)
+
+        if os.path.exists(traj_file):
+            os.remove(traj_file)
+
+        ase_atoms = self.rwMol2AseAtoms()
+        ase_atoms.set_cell([float(box_size), float(box_size), float(box_size)])
+        ase_atoms.center()
+        ase_atoms.pbc = False
+        ase_atoms.calc = self.calculator
+
+        MaxwellBoltzmannDistribution(
+            ase_atoms,
+            temperature_K=float(temperature),
+        )
+        Stationary(ase_atoms)
+        ZeroRotation(ase_atoms)
+
+        dyn = Langevin(
+            ase_atoms,
+            timestep=float(timestep_fs) * units.fs,
+            temperature_K=float(temperature),
+            friction=float(friction) / units.fs,
+            logfile=self._optimizer_logfile(),
+        )
+
+        print(
+            f"Running ASE Langevin MD: T={temperature} K, steps={steps}, "
+            f"dt={timestep_fs} fs, sample_interval={sample_interval}"
+        )
+
+        def write_xyz_frame(step):
+            pe = ase_atoms.get_potential_energy()
+            ke = ase_atoms.get_kinetic_energy()
+            total_energy = pe + ke
+            inst_temperature = ase_atoms.get_temperature()
+            cell_values = " ".join(
+                f"{value:.12f}" for row in ase_atoms.get_cell().array for value in row
+            )
+            velocities = ase_atoms.get_velocities()
+            comment = (
+                f'Lattice="{cell_values}" '
+                'Properties=species:S:1:pos:R:3:vel:R:3 pbc="F F F" '
+                f"step={step} time_fs={step * float(timestep_fs):.6f} "
+                f"TE_eV={total_energy:.12f} PE_eV={pe:.12f} "
+                f"KE_eV={ke:.12f} T_K={inst_temperature:.6f}"
+            )
+            with open(traj_file, "a") as xyz_file:
+                print(len(ase_atoms), file=xyz_file)
+                print(comment, file=xyz_file)
+                for atom, velocity in zip(ase_atoms, velocities):
+                    x, y, z = atom.position
+                    vx, vy, vz = velocity / units.fs
+                    print(
+                        f"{atom.symbol} {x:.12f} {y:.12f} {z:.12f} "
+                        f"{vx:.12f} {vy:.12f} {vz:.12f}",
+                        file=xyz_file,
+                    )
+
+        def write_frame():
+            write_xyz_frame(dyn.nsteps)
+
+        write_xyz_frame(0)
+        dyn.attach(write_frame, interval=sample_interval)
+        dyn.run(int(steps))
+
+        print(f"ASE MD trajectory written to: {traj_file}")
+        return traj_file
 
     def _calcSPEnergy(self, mol, conformerId):
 
