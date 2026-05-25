@@ -419,12 +419,13 @@ def mol_to_sdf(smiles, path, add_h=True, charge=None):
         w.write(mol)
 
 
-def multi_conf_sdf(smiles, path, n_confs=8):
+def multi_conf_sdf(smiles, path, n_confs=8, add_h=True):
     """Generate an SDF file with multiple conformers (external trajectory stand-in)."""
     mol = Chem.MolFromSmiles(smiles)
     if mol is None:
         raise ValueError(f"Could not parse SMILES: {smiles}")
-    mol = Chem.AddHs(mol)
+    if add_h:
+        mol = Chem.AddHs(mol)
     params = AllChem.ETKDGv3()
     params.randomSeed = 42
     AllChem.EmbedMultipleConfs(mol, numConfs=n_confs, params=params)
@@ -571,11 +572,12 @@ def run_one(args, wf_name, wf, mol_key, mol_info, source_sdf, output_root):
         shutil.copy2(source_sdf, mol_sdf)
         file_base = source_sdf.stem
 
-    # External trajectory SDF for sample_md cases
+    # External trajectory SDF for sample_md cases — match the input topology's H count
     extra_md_traj = ""
     if wf.get("sample_md"):
         traj_sdf = case_dir / "external_traj.sdf"
-        multi_conf_sdf(mol_info["smiles"], traj_sdf, n_confs=8)
+        traj_add_h = not mol_info.get("no_explicit_h", False)
+        multi_conf_sdf(mol_info["smiles"], traj_sdf, n_confs=8, add_h=traj_add_h)
         extra_md_traj = str(traj_sdf)
 
     cmd = build_command(args, input_dir, wf, mol_info, extra_md_traj)
