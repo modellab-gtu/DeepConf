@@ -74,6 +74,70 @@ For Gaussian16 support, make sure the `g16` command is available in your shell e
 
 If the installation commands above do not reproduce the working environment on your machine, compare against [`pip-list-ANI_AIMNet_NeQuIP.txt`](pip-list-ANI_AIMNet_NeQuIP.txt). It records a known working `pip list` for troubleshooting, but it is not intended to be a strict lock file.
 
+### Clean WSL Installation
+
+For Windows users, use WSL2 with a Linux distribution such as Ubuntu. Keep the repository and run folders inside the WSL Linux filesystem, for example under `$HOME/projects`, instead of running from a Windows path such as `/mnt/c/Users/.../Documents/GitHub`. This avoids slow file I/O and path issues.
+
+Start from a clean WSL shell:
+
+```bash
+sudo apt update
+sudo apt install -y git wget ca-certificates bzip2
+mkdir -p "$HOME/projects"
+cd "$HOME/projects"
+git clone https://github.com/modellab-gtu/DeepConf.git
+cd DeepConf
+```
+
+If Conda is not already available in WSL, install Miniconda for Linux first and restart the shell, or source Conda manually:
+
+```bash
+source "$HOME/miniconda3/etc/profile.d/conda.sh"
+```
+
+Create a fresh DeepConf environment and install the core dependencies:
+
+```bash
+conda create -y --name ANI_AIMNet_NeQuIP python=3.11
+conda activate ANI_AIMNet_NeQuIP
+conda install -y -c conda-forge numpy pandas tqdm rdkit openbabel ase pytorch torchani dftd3-python auto3d
+```
+
+The additional `psi4` `dftd3` package is optional for the ANI/AIMNet2/NequIP workflows:
+
+```bash
+conda install -y -c psi4 dftd3
+```
+
+Install AIMNet2 and NequIP support when those calculators are needed:
+
+```bash
+python -m pip install aimnet nequip==0.6.1
+```
+
+Check the environment:
+
+```bash
+python -c "import numpy, pandas, rdkit, ase, openbabel, torch, torchani; print('DeepConf core imports OK')"
+python -m py_compile runConfGen.py core_conf.py
+```
+
+When using `runConfGen.sh` from WSL, set the repository and Python paths to the WSL install locations:
+
+```bash
+ligPrep_DIR="$HOME/projects/DeepConf"
+PYTHON_DIR="$HOME/miniconda3/envs/ANI_AIMNet_NeQuIP/bin"
+```
+
+For GPU use in WSL, first confirm that Windows NVIDIA drivers and WSL GPU passthrough are working:
+
+```bash
+nvidia-smi
+python -c "import torch; print(torch.__version__); print(torch.cuda.is_available())"
+```
+
+If `torch.cuda.is_available()` is `False`, DeepConf can still run CPU-side for small tests, but ML-calculator production runs will be much slower. If `pip install aimnet` replaces PyTorch with a CUDA build that does not match your driver, install a PyTorch build matching your WSL/NVIDIA driver before installing AIMNet2, or use the CPU-side environment for smoke tests.
+
 ## Quick Start
 
 Create a work directory and put your ligand files in your own input folder. The repository does not ship with a default `test/` input folder.
