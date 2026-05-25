@@ -57,6 +57,14 @@ parser.add_argument("g16_level", nargs="?", default="WB97XD")
 parser.add_argument("g16_basis", nargs="?", default="6-311++G(3df,3pd)")
 parser.add_argument("sample_md", nargs="?", default="no")
 parser.add_argument("external_md_traj_file", nargs="?", default="")
+parser.add_argument("run_md", nargs="?", default="no")
+parser.add_argument("md_temperature", nargs="?", type=float, default=400.0)
+parser.add_argument("md_steps", nargs="?", type=int, default=50000)
+parser.add_argument("md_timestep_fs", nargs="?", type=float, default=1.0)
+parser.add_argument("md_sample_interval", nargs="?", type=int, default=500)
+parser.add_argument("md_friction", nargs="?", type=float, default=0.01)
+parser.add_argument("md_box_size", nargs="?", type=float, default=20.0)
+parser.add_argument("md_traj_file", nargs="?", default="md_sampled_confs.xyz")
 
 
 def calcFuncRunTime(func):
@@ -494,6 +502,21 @@ def runConfGen(file_name):
             print(e, " eV", file=pre_e_file)
         lig.writeRWMol2File("%s/pre_%s%s.sdf"%(WORK_DIR, prefix, file_base), Energy=e)
 
+    if run_md:
+        md_output = md_traj_file
+        if not os.path.isabs(md_output):
+            md_output = os.path.join(WORK_DIR, md_output)
+        external_md_traj_file = lig.runAseMD(
+            md_output,
+            temperature=md_temperature,
+            steps=md_steps,
+            timestep_fs=md_timestep_fs,
+            sample_interval=md_sample_interval,
+            friction=md_friction,
+            box_size=md_box_size,
+        )
+        sample_md = True
+
     if genconformer or sample_md:
         out_file_path="%s/%sminE_conformer.sdf"%(WORK_DIR, prefix)
         lig = setGenConformers(lig, out_file_path, mmCalculator)
@@ -562,6 +585,14 @@ if __name__ == "__main__":
         external_md_traj_file = _resolve_external_md_traj_file(
             args.external_md_traj_file
         )
+    run_md = getBoolStr(args.run_md)
+    md_temperature = args.md_temperature
+    md_steps = args.md_steps
+    md_timestep_fs = args.md_timestep_fs
+    md_sample_interval = args.md_sample_interval
+    md_friction = args.md_friction
+    md_box_size = args.md_box_size
+    md_traj_file = args.md_traj_file
 
     if not verbose:
         from rdkit import RDLogger
@@ -571,6 +602,9 @@ if __name__ == "__main__":
     if sample_md:
         external_basename = os.path.basename(external_md_traj_file)
         file_names = [item for item in file_names if item != external_basename]
+    if run_md:
+        md_basename = os.path.basename(md_traj_file)
+        file_names = [item for item in file_names if item != md_basename]
     failed_csv = open("failed_files.csv", "w")
     failed_csv.write("FileNames,\n")
 

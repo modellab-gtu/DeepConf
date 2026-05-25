@@ -450,11 +450,16 @@ class confGen:
                 frames = [frames]
 
             for frame_id, atoms in enumerate(frames):
+                if len(atoms) == 0:
+                    print(f"Warning: skipping empty external trajectory frame {frame_id}")
+                    continue
+
                 frame_symbols = list(atoms.get_chemical_symbols())
                 if frame_symbols != template_symbols:
-                    raise ValueError(
-                        f"External trajectory frame {frame_id} atom symbols/order do not "
-                        "match the input molecule topology."
+                    print(
+                        f"Warning: external trajectory frame {frame_id} atom symbols "
+                        "do not match the input topology. Using frame coordinates by "
+                        "atom index with the input molecule topology."
                     )
                 conformerIds.append(
                     self._addConformerFromPositions(mol, atoms.get_positions())
@@ -1075,6 +1080,70 @@ class confGen:
             return float(calculator_energy) + self._nequip_atomic_self_energy(ase_atoms)
 
         return calculator_energy
+
+    def runAseMD(self, traj_file, temperature=400.0, steps=50000,
+                 timestep_fs=1.0, sample_interval=500, friction=0.01,
+                 box_size=20.0):
+        if self.calculator is None:
+            print("Error: Calculator not found. Please set any calculator")
+            sys.exit(1)
+
+        from ase import units
+        from ase.io import write
+        from ase.md.langevin import Langevin
+        from ase.md.velocitydistribution import (
+            MaxwellBoltzmannDistribution,
+            Stationary,
+            ZeroRotation,
+        )
+
+        sample_interval = int(sample_interval)
+        if sample_interval <= 0:
+            raise ValueError("md_sample_interval must be a positive integer")
+
+        traj_file = os.path.expandvars(os.path.expanduser(str(traj_file)))
+        traj_dir = os.path.dirname(traj_file)
+        if traj_dir and not os.path.exists(traj_dir):
+            os.makedirs(traj_dir)
+
+        if os.path.exists(traj_file):
+            os.remove(traj_file)
+
+        ase_atoms = self.rwMol2AseAtoms()
+        ase_atoms.set_cell([float(box_size), float(box_size), float(box_size)])
+        ase_atoms.center()
+        ase_atoms.pbc = False
+        ase_atoms.calc = self.calculator
+
+        MaxwellBoltzmannDistribution(
+            ase_atoms,
+            temperature_K=float(temperature),
+        )
+        Stationary(ase_atoms)
+        ZeroRotation(ase_atoms)
+
+        dyn = Langevin(
+            ase_atoms,
+            timestep=float(timestep_fs) * units.fs,
+            temperature_K=float(temperature),
+            friction=float(friction) / units.fs,
+            logfile=self._optimizer_logfile(),
+        )
+
+        print(
+            f"Running ASE Langevin MD: T={temperature} K, steps={steps}, "
+            f"dt={timestep_fs} fs, sample_interval={sample_interval}"
+        )
+        write(traj_file, ase_atoms, format="xyz", append=True)
+
+        def write_frame():
+            write(traj_file, ase_atoms, format="xyz", append=True)
+
+        dyn.attach(write_frame, interval=sample_interval)
+        dyn.run(int(steps))
+
+        print(f"ASE MD trajectory written to: {traj_file}")
+        return traj_file
 
     def _calcSPEnergy(self, mol, conformerId):
 
