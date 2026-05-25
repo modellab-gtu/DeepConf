@@ -223,10 +223,10 @@ The `all_NNP_MODELS/yml_file/` folder contains reference environment YAML files 
 | `md_temperature` | `400` | MD temperature in K. |
 | `md_steps` | `50000` | Number of MD steps. Total simulation time is `md_steps * md_timestep_fs`. |
 | `md_timestep_fs` | `1.0` | MD time step in fs. |
-| `md_sample_interval` | `500` | Write one trajectory frame every this many MD steps. |
+| `md_sample_interval` | `500` | Write one trajectory frame every this many MD steps. For example, `100` saves frames at steps 0, 100, 200, etc. |
 | `md_friction` | `0.01` | ASE Langevin friction in inverse fs. |
 | `md_box_size` | `20.0` | Cubic cell length in Angstrom. The cell is non-periodic and used only to hold the molecule. |
-| `md_traj_file` | `md_sampled_confs.xyz` | XYZ trajectory written under each ligand work folder and then used as the conformer source. Each frame comment line includes MD step, time, total energy, potential energy, kinetic energy, and instantaneous temperature. |
+| `md_traj_file` | `md_sampled_confs.xyz` | Extended XYZ trajectory written under each ligand work folder and then used as the conformer source. Each frame header includes box vectors, MD step, time, total energy, potential energy, kinetic energy, and instantaneous temperature. Atom lines include coordinates and velocities. |
 
 Internal MD currently uses the selected ASE-compatible calculator, such as ANI, AIMNet2, or NequIP. Classical OpenMM/GROMACS/AMBER-style workflows are not part of this first internal MD implementation.
 

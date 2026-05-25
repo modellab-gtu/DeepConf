@@ -1139,7 +1139,13 @@ class confGen:
             ke = ase_atoms.get_kinetic_energy()
             total_energy = pe + ke
             inst_temperature = ase_atoms.get_temperature()
+            cell_values = " ".join(
+                f"{value:.12f}" for row in ase_atoms.get_cell().array for value in row
+            )
+            velocities = ase_atoms.get_velocities()
             comment = (
+                f'Lattice="{cell_values}" '
+                'Properties=species:S:1:pos:R:3:vel:R:3 pbc="F F F" '
                 f"step={step} time_fs={step * float(timestep_fs):.6f} "
                 f"TE_eV={total_energy:.12f} PE_eV={pe:.12f} "
                 f"KE_eV={ke:.12f} T_K={inst_temperature:.6f}"
@@ -1147,10 +1153,12 @@ class confGen:
             with open(traj_file, "a") as xyz_file:
                 print(len(ase_atoms), file=xyz_file)
                 print(comment, file=xyz_file)
-                for atom in ase_atoms:
+                for atom, velocity in zip(ase_atoms, velocities):
                     x, y, z = atom.position
+                    vx, vy, vz = velocity / units.fs
                     print(
-                        f"{atom.symbol} {x:.12f} {y:.12f} {z:.12f}",
+                        f"{atom.symbol} {x:.12f} {y:.12f} {z:.12f} "
+                        f"{vx:.12f} {vy:.12f} {vz:.12f}",
                         file=xyz_file,
                     )
 
