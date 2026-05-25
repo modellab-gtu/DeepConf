@@ -1089,7 +1089,6 @@ class confGen:
             sys.exit(1)
 
         from ase import units
-        from ase.io import write
         from ase.md.langevin import Langevin
         from ase.md.velocitydistribution import (
             MaxwellBoltzmannDistribution,
@@ -1134,11 +1133,31 @@ class confGen:
             f"Running ASE Langevin MD: T={temperature} K, steps={steps}, "
             f"dt={timestep_fs} fs, sample_interval={sample_interval}"
         )
-        write(traj_file, ase_atoms, format="xyz", append=True)
+
+        def write_xyz_frame(step):
+            pe = ase_atoms.get_potential_energy()
+            ke = ase_atoms.get_kinetic_energy()
+            total_energy = pe + ke
+            inst_temperature = ase_atoms.get_temperature()
+            comment = (
+                f"step={step} time_fs={step * float(timestep_fs):.6f} "
+                f"TE_eV={total_energy:.12f} PE_eV={pe:.12f} "
+                f"KE_eV={ke:.12f} T_K={inst_temperature:.6f}"
+            )
+            with open(traj_file, "a") as xyz_file:
+                print(len(ase_atoms), file=xyz_file)
+                print(comment, file=xyz_file)
+                for atom in ase_atoms:
+                    x, y, z = atom.position
+                    print(
+                        f"{atom.symbol} {x:.12f} {y:.12f} {z:.12f}",
+                        file=xyz_file,
+                    )
 
         def write_frame():
-            write(traj_file, ase_atoms, format="xyz", append=True)
+            write_xyz_frame(dyn.nsteps)
 
+        write_xyz_frame(0)
         dyn.attach(write_frame, interval=sample_interval)
         dyn.run(int(steps))
 
