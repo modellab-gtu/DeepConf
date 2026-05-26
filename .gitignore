@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+*.swp
+*.swo
+
+# DeepConf run outputs
+timings.csv
+failed_files.csv
+test_matrix_runs/
+
+# Local test/scratch directories
+foldedtest/
