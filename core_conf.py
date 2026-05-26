@@ -511,8 +511,9 @@ class confGen:
     #  @calcFuncRunTime
     def _getClusterRMSDFromFiles(self, conf_dir, rmsd_thresh, linkage_method="complete",
                                  cluster_nprocs=None, cluster_chunk_size=4000):
+        output_name = f"{self.getFileBase()}_output.sdf"
         sdf_files = sorted([fl_name for fl_name in os.listdir(conf_dir)
-                            if fl_name.endswith(".sdf")])
+                            if fl_name.endswith(".sdf") and fl_name != output_name])
 
         mol_list = []
         file_energy = {}
@@ -649,7 +650,11 @@ class confGen:
         global_minE_file = None
 
         for cluster_id, fl_names in cluster_conf.items():
-            fl_names.sort(key=lambda f: energy_by_file[f])
+            fl_names.sort(key=lambda f: energy_by_file.get(f, np.inf))
+            # drop any files not in this run's CSV (stale from a previous failed trial)
+            fl_names = [f for f in fl_names if f in energy_by_file]
+            if not fl_names:
+                continue
             minE_file = fl_names[0]
             minE = energy_by_file[minE_file]
             local_files_minE[minE_file] = minE
