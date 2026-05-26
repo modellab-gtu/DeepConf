@@ -799,6 +799,8 @@ class confGen:
         elif ETKDG:
             ps = rdkit.Chem.rdDistGeom.ETKDGv3()
             ps.numThreads = NPROCS_ALL
+            ps.randomSeed = 42
+            ps.useRandomCoords = True
             conformerIds = list(rdkit.Chem.rdDistGeom.EmbedMultipleConfs(
                 mol,
                 numConfs,
