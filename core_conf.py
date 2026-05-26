@@ -1069,7 +1069,7 @@ class confGen:
         results["energy_abs"] = ff.CalcEnergy()
         return results
 
-    def setG16Calculator(self, label, chk, nprocs, xc, basis, scf, addsec=None,
+    def setG16Calculator(self, label, chk, g16_nprocs, xc, basis, scf, addsec=None,
                          extra=None, charge=0, mult=1, mem="4GB"):
         from ase.calculators.gaussian import Gaussian
         self.optG16 = True
@@ -1078,7 +1078,7 @@ class confGen:
         self.calculator = Gaussian(
             label=label,
             #  chk=chk,
-            nprocshared=nprocs,
+            nprocshared=g16_nprocs,
             xc=xc,
             basis=basis,
             scf=scf,

@@ -25,7 +25,7 @@ parser.add_argument("optimization_conf", nargs="?", default="No") # args for boo
 parser.add_argument("optimization_lig", nargs="?", default="No") # args for bool
 parser.add_argument("pre_optimization_lig", nargs="?", default="No") # args for bool
 parser.add_argument("genconformer", nargs="?", default="No") # args for bool
-parser.add_argument("nprocs", type=int, default=nprocs_all)
+parser.add_argument("g16_nprocs", type=int, default=nprocs_all)
 parser.add_argument("thr_fmax", type=float, default=0.05)
 parser.add_argument("maxiter", type=int, default=500)
 
@@ -342,7 +342,7 @@ def setG16calculator(lig, file_base, label, WORK_DIR, charge=0, mult=1,
     lig.setG16Calculator(
             label="%s/g16_%s/%s"%(WORK_DIR, label, file_base),
             chk="",
-            nprocs=nprocs,
+            g16_nprocs=g16_nprocs,
             xc=level,
             basis=basis,
             scf="XQC, maxconventionalcycles=100",
@@ -552,7 +552,7 @@ if __name__ == "__main__":
     ignore_hydrogen = getBoolStr(args.ignore_hydrogen)
     ETKDG = getBoolStr(args.ETKDG)
 
-    nprocs = args.nprocs
+    g16_nprocs = args.g16_nprocs
     thr_fmax = args.thr_fmax
     maxiter = args.maxiter
 
