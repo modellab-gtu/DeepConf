@@ -886,9 +886,17 @@ class confGen:
         # This replaces N_conformers serial GPU calls with ceil(N/gpu_batch_size) batched calls.
         _sp_energy_cache = None
         if not mmCalculator and self._is_aimnet2_calculator():
+            from tqdm import tqdm
             all_conf_ids_flat = [cid for cids in cluster_conf_id.values() for cid in cids]
-            print(f"Batched GPU SP: {len(all_conf_ids_flat)} conformers")
-            _sp_batch = self._calcSPEnergyBatchedAIMNet2(mol, all_conf_ids_flat)
+            gpu_batch_size = 256
+            n_batches = (len(all_conf_ids_flat) + gpu_batch_size - 1) // gpu_batch_size
+            print(f"Batched GPU SP: {len(all_conf_ids_flat)} conformers ({n_batches} GPU batches)")
+            _sp_batch = []
+            with tqdm(total=len(all_conf_ids_flat), desc="SP energies", unit="conf") as pbar:
+                for start in range(0, len(all_conf_ids_flat), gpu_batch_size):
+                    batch_ids = all_conf_ids_flat[start:start + gpu_batch_size]
+                    _sp_batch.extend(self._calcSPEnergyBatchedAIMNet2(mol, batch_ids))
+                    pbar.update(len(batch_ids))
             _sp_energy_cache = {cid: e for cid, (e, _) in zip(all_conf_ids_flat, _sp_batch)}
 
         for cluster, clustered_confIds in cluster_conf_id.items():
@@ -1377,9 +1385,7 @@ class confGen:
         all_energies = []
         all_forces = [] if forces else None
 
-        from tqdm import tqdm
-        batch_starts = list(range(0, B_total, gpu_batch_size))
-        for start in tqdm(batch_starts, desc="GPU batches", unit="batch"):
+        for start in range(0, B_total, gpu_batch_size):
             end = min(start + gpu_batch_size, B_total)
             Bsub = end - start
 
@@ -1451,9 +1457,11 @@ class confGen:
         converged = np.zeros(B, dtype=bool)
         last_energies = np.zeros(B)
 
+        from tqdm import tqdm
         print(f"Batched GPU FIRE: {B} conformers, sub-batch={gpu_batch_size}, "
               f"fmax={self.fmax}, maxiter={self.maxiter}")
 
+        pbar = tqdm(total=B, desc="FIRE converged", unit="conf")
         for step in range(self.maxiter):
             active = np.where(~converged)[0]
             if len(active) == 0:
@@ -1470,15 +1478,16 @@ class confGen:
             # Convergence: max per-atom force per conformer
             fmax_per = np.sqrt((forces_a ** 2).sum(axis=2)).max(axis=1)
             newly_conv_local = fmax_per < self.fmax
+            n_newly = int(newly_conv_local.sum())
             converged[active[newly_conv_local]] = True
 
             still_active = active[~newly_conv_local]
+            if n_newly:
+                pbar.update(n_newly)
+                pbar.set_postfix(step=step + 1, active=len(still_active),
+                                 fmax=f"{fmax_per.max():.3f}")
             if len(still_active) == 0:
                 break
-
-            if (step + 1) % 50 == 0:
-                print(f"  Step {step+1}: {converged.sum()}/{B} converged, "
-                      f"fmax_max={fmax_per.max():.4f}")
 
             # Vectorized FIRE update for still-active conformers
             fa = forces_a[~newly_conv_local]
@@ -1524,6 +1533,7 @@ class confGen:
             alpha[still_active] = alpa
             n_pos[still_active] = npa
 
+        pbar.close()
         n_conv = int(converged.sum())
         if n_conv < B:
             print(f"  Warning: {B - n_conv}/{B} conformers did not converge "
