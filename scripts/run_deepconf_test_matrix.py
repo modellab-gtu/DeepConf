@@ -582,10 +582,10 @@ def run_one(args, wf_name, wf, mol_key, mol_info, source_sdf, output_root):
 
     cmd = build_command(args, input_dir, wf, mol_info, extra_md_traj)
 
-    # Is this case expected to fail?
-    wf_fail_calcs = wf.get("expected_fail_calculators", set())
-    mol_fail_calcs = mol_info.get("expected_fail_calculators", set())
-    expected_fail = args.calculator in (wf_fail_calcs | mol_fail_calcs)
+    fail_calcs = (mol_info.get("expected_fail_calculators") or set())
+    # Route 1 (no_output_expected) never calls the calculator, so incompatible
+    # element sets don't apply — always expect success there.
+    expected_fail = (args.calculator in fail_calcs) and not route.get("no_output_expected", False)
 
     start = time.time()
     try:
@@ -930,16 +930,71 @@ def main():
         calc_root = args.output_root / calc
         calc_root.mkdir(exist_ok=True)
 
-        for wf_name, wf, mol_key, mol_info in tasks:
-            # Prepare source SDF for non-override molecules
-            if "molecule_override" not in wf and source_sdf is None:
-                sdf_path = calc_root / f"{mol_key}.sdf"
-                if not sdf_path.exists():
-                    if mol_info.get("smiles"):
-                        mol_to_sdf(mol_info["smiles"], sdf_path,
-                                   charge=mol_info.get("charge", 0))
-                    else:
-                        print(f"  SKIP {wf_name}/{mol_key}: no SDF source")
+        # Pre-generate SDF files for mol_pool + any molecules needed by init tests
+        sdf_cache = {}
+        init_mol_keys = {cfg["molecule"] for cfg in INIT_TESTS.values()}
+        sdf_mol_pool = dict(mol_pool)
+        for k in init_mol_keys:
+            if k not in sdf_mol_pool and k in MOLECULE_LIBRARY:
+                sdf_mol_pool[k] = MOLECULE_LIBRARY[k]
+        for mol_key, mol_info in sdf_mol_pool.items():
+            smiles = mol_info.get("smiles")
+            if not smiles:
+                if args.input_sdf:
+                    sdf_cache[mol_key] = args.input_sdf.resolve()
+                continue
+            p = calc_root / f"{mol_key}.sdf"
+            if not p.exists():
+                add_h = not mol_info.get("no_explicit_h", False)
+                mol_to_sdf(smiles, p, add_h=add_h,
+                           charge=mol_info.get("charge", 0))
+            sdf_cache[mol_key] = p
+
+        # ----- Step 1 --------------------------------------------------------
+        if 1 in steps:
+            print(f"[{calc}] Step 1 — Initialization")
+            # Use first available preferred calculator; init always runs on
+            # whatever calc is active (tests calc setup + mol reading)
+            for init_name, init_cfg in INIT_TESTS.items():
+                mol_key = init_cfg["molecule"]
+                if mol_key not in MOLECULE_LIBRARY:
+                    continue
+                mol_info   = MOLECULE_LIBRARY[mol_key]
+                route      = ROUTE_CASES[init_cfg["route"]]
+                source_sdf = sdf_cache.get(mol_key)
+                if source_sdf is None:
+                    print(f"  SKIP {init_name}: no SDF")
+                    continue
+                print(f"  [{init_cfg['capability']}] {init_name} ...", flush=True)
+                result = run_one(
+                    args, init_cfg["route"], route, mol_key, mol_info,
+                    source_sdf, calc_root,
+                    case_tag=f"step1__{init_name}__{calc}",
+                )
+                result["step"] = 1
+                result["route"] = f"step1/{init_cfg['route']}"
+                result["description"] = init_cfg["description"]
+                all_results.append(result)
+                status = f"  → {result['verdict']}  ({result['elapsed_s']}s)"
+                if not result["passed"]:
+                    status += f"  [RC={result['returncode']}]"
+                print(status, flush=True)
+            print()
+
+        # ----- Step 2 --------------------------------------------------------
+        if 2 in steps:
+            print(f"[{calc}] Step 2 — Processing routes")
+            for route_name, route in route_pool.items():
+                # Skip if this route excludes the current calculator
+                route_calcs = route.get("calcs")
+                if route_calcs is not None and calc not in route_calcs:
+                    continue
+
+                for mol_key, mol_info in mol_pool.items():
+                    if route_name in (mol_info.get("skip_routes") or set()):
+                        continue
+                    source_sdf = sdf_cache.get(mol_key)
+                    if source_sdf is None:
                         continue
                 effective_sdf = sdf_path
             elif "molecule_override" in wf:

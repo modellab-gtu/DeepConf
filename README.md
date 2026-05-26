@@ -495,6 +495,93 @@ timings.csv
 failed_files.csv
 ```
 
+## Testing
+
+The repository ships a validation test matrix at `scripts/run_deepconf_test_matrix.py` that covers all supported workflows and calculators.
+
+### Molecule library
+
+Ten molecules are tested covering the relevant combinations:
+
+| Key | Molecule | Elements | Torsions | Explicit H |
+|-----|----------|----------|----------|------------|
+| `chno_rigid` | Acetaminophen | CHNO | ~2 | yes |
+| `chno_rigid_noh` | Acetaminophen | CHNO | ~2 | no |
+| `chno_flex` | 6-Aminohexanoic acid | CHNO | ~5 | yes |
+| `chno_flex_noh` | 6-Aminohexanoic acid | CHNO | ~5 | no |
+| `multi_rigid` | 4-Chlorobenzenesulfonamide | CHNOSCl | ~1 | yes |
+| `multi_rigid_noh` | 4-Chlorobenzenesulfonamide | CHNOSCl | ~1 | no |
+| `multi_flex` | Phosphoserine | CHNOP | ~5 | yes |
+| `multi_flex_noh` | Phosphoserine | CHNOP | ~5 | no |
+| `charged_pos` | Glycinium | CHNO | — | yes (+1) |
+| `charged_neg` | Acetate | CHNO | — | yes (−1) |
+
+`multi_flex` / `multi_flex_noh` contain phosphorus and are expected to fail with ANI2x (P not in training set); all other calculators handle them correctly.
+
+### Processing routes (Step 2)
+
+| Route | Description | Calcs |
+|-------|-------------|-------|
+| Route 1 | Read and write only — no calculation | all 4 |
+| Route 2 | Geometry optimisation only | all 4 |
+| Route 3 | RDKit conformer generation, no NNP opt | all 4 |
+| Route 4 | RDKit conformer generation + NNP conf opt | all 4 |
+| Route 5 | Pre-opt input + conformer generation | all 4 |
+| Route 6 | Pre-opt input + conformer generation + NNP conf opt | all 4 |
+| Route 7 | External MD trajectory as conformer source + NNP/g16 opt | all 4 |
+| Route 8 | Internal ASE Langevin MD + NNP conf opt | ani2x, aimnet2, nequip |
+| Route 9 | Pre-opt input + internal ASE MD + NNP conf opt | ani2x, aimnet2, nequip |
+
+Priority when flags overlap: `run_md > sample_md > genconformer`.
+
+### Initialization tests (Step 1)
+
+Step 1 verifies basic capabilities independently of the processing routes: hydrogen addition, bond-order perception, and charged-molecule handling.
+
+### Running the matrix
+
+```bash
+# Full matrix — all molecules, all routes, one calculator
+python scripts/run_deepconf_test_matrix.py \
+    --calculator aimnet2 \
+    --output-root /tmp/deepconf_test_out
+
+# Subset — specific routes and molecules
+python scripts/run_deepconf_test_matrix.py \
+    --calculator aimnet2 \
+    --routes route4,route6,route8 \
+    --molecules chno_rigid,chno_flex \
+    --output-root /tmp/deepconf_test_out
+
+# Gaussian (g16) — step 2 only, recommended settings
+python scripts/run_deepconf_test_matrix.py \
+    --calculator g16 --step 2 \
+    --nprocs 64 --g16-mem 40GB --g16-level HF --g16-basis 3-21G \
+    --output-root /tmp/deepconf_test_out
+```
+
+Results are written as `test_matrix_report.md` and `test_matrix_report.json` in the output root.
+
+### Performance notes
+
+Actual wall times depend heavily on hardware; the guidance below reflects relative cost rather than absolute seconds.
+
+- **Routes 1–3** involve no NNP optimization and complete in a few seconds per molecule regardless of calculator. They are suitable for smoke-testing a new environment on CPU.
+- **Routes 4–7** invoke the NNP or g16 calculator for conformer optimization. On CPU these take tens of seconds per molecule for rigid molecules and up to a few minutes for flexible ones (many conformers × optimization iterations). On GPU (AIMNet2, NequIP) the same routes typically finish 5–15× faster.
+- **Routes 8–9** add an internal ASE Langevin MD run before conformer optimization. At the default 1 000-step / 1 fs setting, expect roughly 1–2 min per molecule on GPU and significantly longer on CPU — **use GPU for NequIP and AIMNet2 in production MD routes**.
+- **ANI2x** is the fastest calculator on CPU (no GPU required for typical ligand sizes); AIMNet2 and NequIP benefit most from CUDA.
+- **Gaussian (g16)** runtime scales with basis set and molecule size. HF/3-21G with 64 processors is practical for validation; production runs should use a larger basis (e.g. 6-31G*) and budget several minutes per optimization.
+- The `--md-steps` default in the test matrix (1 000) is intentionally short. For production conformer diversity, 10 000–50 000 steps is more appropriate but multiplies MD time proportionally.
+
+### Validated results
+
+| Calculator | Routes | Cases | Result |
+|------------|--------|-------|--------|
+| aimnet2 (CPU) | 1–9 + Step 1 | 88/88 | ✅ 100% |
+| ani2x (CPU) | 1–9 + Step 1 | 88/88 | ✅ 100% |
+| nequip (CUDA) | 1–9 + Step 1 | 96/96 | ✅ 100% |
+| g16 HF/3-21G | Route 7 | 1/1 | ✅ PASS |
+
 ## Notes
 
 - RMSD clustering uses direct RDKit `GetBestRMS` comparisons with complete linkage by default.
