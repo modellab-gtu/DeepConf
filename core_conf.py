@@ -450,6 +450,7 @@ class confGen:
         return features
 
     def _getClusterKmeansFromTorsions(self, mol, conformerIds, n_group):
+        import time
         from sklearn.cluster import KMeans
         cluster_conf_id = defaultdict(list)
         n_group = min(int(n_group), len(conformerIds))
@@ -457,12 +458,19 @@ class confGen:
             cluster_conf_id[0] = list(conformerIds)
             return cluster_conf_id
 
+        t0 = time.time()
+        print(f"  Extracting torsion angles for {len(conformerIds)} conformers...", flush=True)
         features = self._getTorsionAnglesForConformers(mol, conformerIds)
         if features.shape[1] == 0:
             cluster_conf_id[0] = list(conformerIds)
             return cluster_conf_id
+        print(f"  Torsion features: {features.shape}  ({time.time()-t0:.1f}s)", flush=True)
 
+        t1 = time.time()
+        print(f"  Running KMeans: n_clusters={n_group}, n_init=10...", flush=True)
         labels = KMeans(n_clusters=n_group, n_init=10, random_state=42).fit_predict(features)
+        print(f"  KMeans done  ({time.time()-t1:.1f}s)", flush=True)
+
         for label, cid in zip(labels, conformerIds):
             cluster_conf_id[int(label)].append(cid)
         return cluster_conf_id
@@ -874,6 +882,7 @@ class confGen:
         print("Processing torsion-angle k-means clustering")
         n_group = min(self._getNumConfs(nfold, scaled=1), len(conformerIds))
         cluster_conf_id = self._getClusterKmeansFromTorsions(mol, conformerIds, n_group=n_group)
+        print(f"Clusters formed: {len(cluster_conf_id)}, picking 1 representative each")
         print("Calculating SP energies")
         minEConformerIDs = []
         all_picked_confs = []
@@ -1373,9 +1382,11 @@ class confGen:
         all_energies = []
         all_forces = [] if forces else None
 
-        for start in range(0, B_total, gpu_batch_size):
+        n_batches = (B_total + gpu_batch_size - 1) // gpu_batch_size
+        for batch_idx, start in enumerate(range(0, B_total, gpu_batch_size)):
             end = min(start + gpu_batch_size, B_total)
             Bsub = end - start
+            print(f"  GPU batch {batch_idx+1}/{n_batches}: conformers {start+1}-{end}", flush=True)
 
             pos_sub = torch.tensor(positions_np[start:end], dtype=torch.float32)
             t_numbers = torch.tensor(atom_numbers, dtype=torch.int64).unsqueeze(0).expand(Bsub, -1)
