@@ -58,6 +58,13 @@ def _calcRMSDsymm_global(pair_idx):
     return calcRMSDsymm(pair_idx, _rmsd_mol_ref)
 
 
+# Module-level ref set before Pool fork so workers inherit via COW — no per-task pickling.
+_rmsd_mol_ref = None
+
+def _calcRMSDsymm_global(pair_idx):
+    return calcRMSDsymm(pair_idx, _rmsd_mol_ref)
+
+
 def calcRMSDsymm(pair_idx, mol_list):
 
     idx1 = pair_idx[0]
@@ -839,6 +846,15 @@ class confGen:
         minEConformerIDs = []
         all_picked_confs = []
 
+        # Pre-compute all SP energies in GPU batches when AIMNet2 is active.
+        # This replaces N_conformers serial GPU calls with ceil(N/gpu_batch_size) batched calls.
+        _sp_energy_cache = None
+        if not mmCalculator and self._is_aimnet2_calculator():
+            all_conf_ids_flat = [cid for cids in cluster_conf_id.values() for cid in cids]
+            print(f"Batched GPU SP: {len(all_conf_ids_flat)} conformers")
+            _sp_batch = self._calcSPEnergyBatchedAIMNet2(mol, all_conf_ids_flat)
+            _sp_energy_cache = {cid: e for cid, (e, _) in zip(all_conf_ids_flat, _sp_batch)}
+
         for cluster, clustered_confIds in cluster_conf_id.items():
 
             if saveConfs:
@@ -856,6 +872,8 @@ class confGen:
                 ase_atoms = self._rwConformer2AseAtoms(mol, conformerId)
                 if mmCalculator:
                     e = self._calcEnergyWithMM(mol, conformerId, 100)["energy_abs"]
+                elif _sp_energy_cache is not None:
+                    e = _sp_energy_cache[conformerId]
                 else:
                     e, _ = self._calcSPEnergy(mol, conformerId)
 
@@ -904,11 +922,23 @@ class confGen:
         print("FileName,Energy(eV),EnergyPerAtom(eV)", file=picked_file_csv)
         picked_file_csv.flush()
 
-        for i, conformerId  in enumerate(all_picked_confs):
+        conf_ids_list = list(all_picked_confs)
+        if self._is_aimnet2_calculator():
             if optimization_conf:
-                e, ase_atoms = self._geomOptimizationConf(mol, conformerId)
+                print(f"Batched GPU FIRE optimization: {len(conf_ids_list)} conformers")
+                conf_results = self._geomOptimizationBatchedAIMNet2(mol, conf_ids_list)
             else:
-                e, ase_atoms = self._calcSPEnergy(mol, conformerId)
+                print(f"Batched GPU SP energies: {len(conf_ids_list)} picked conformers")
+                conf_results = self._calcSPEnergyBatchedAIMNet2(mol, conf_ids_list)
+        else:
+            conf_results = []
+            for conformerId in conf_ids_list:
+                if optimization_conf:
+                    conf_results.append(self._geomOptimizationConf(mol, conformerId))
+                else:
+                    conf_results.append(self._calcSPEnergy(mol, conformerId))
+
+        for conformerId, (e, ase_atoms) in zip(conf_ids_list, conf_results):
             conf_file_path = "%s/%sconf_%d.sdf"%(PICKED_CONF_DIR, prefix, conformerId)
 
             #  save optimized structure  with rdkit as sdf
@@ -1283,6 +1313,191 @@ class confGen:
 
         e = self._reportedCalculatorEnergy(ase_atoms, ase_atoms.get_potential_energy())
         return e, ase_atoms
+
+    def _is_aimnet2_calculator(self):
+        try:
+            from aimnet.calculators import AIMNet2ASE
+        except ImportError:
+            try:
+                from aimnet.calculators.aimnet2ase import AIMNet2ASE
+            except ImportError:
+                return False
+        return isinstance(self.calculator, AIMNet2ASE)
+
+    def _aimnet2_batch_eval(self, positions_np, atom_numbers, forces=True, gpu_batch_size=256):
+        """Batched AIMNet2 forward pass over multiple conformer positions.
+
+        positions_np: float32 array [B, N, 3]
+        atom_numbers: int array [N]
+        Returns (energies [B], forces [B, N, 3]) or (energies [B], None).
+        """
+        import torch
+        base_calc = self.calculator.base_calc
+        device = base_calc.device
+        charge = float(self.calculator.charge)
+        mult = float(self.calculator.mult)
+        B_total = positions_np.shape[0]
+
+        all_energies = []
+        all_forces = [] if forces else None
+
+        for start in range(0, B_total, gpu_batch_size):
+            end = min(start + gpu_batch_size, B_total)
+            Bsub = end - start
+
+            pos_sub = torch.tensor(positions_np[start:end], dtype=torch.float32)
+            t_numbers = torch.tensor(atom_numbers, dtype=torch.int64).unsqueeze(0).expand(Bsub, -1)
+            t_charge = torch.full((Bsub,), charge, dtype=torch.float32)
+            t_mult = torch.full((Bsub,), mult, dtype=torch.float32)
+
+            _in = {
+                "coord": pos_sub.to(device),
+                "numbers": t_numbers.to(device),
+                "charge": t_charge.to(device),
+                "mult": t_mult.to(device),
+            }
+            res = base_calc.eval(_in, forces=forces)
+            all_energies.append(res["energy"].detach().cpu().numpy())
+            if forces:
+                all_forces.append(res["forces"].detach().cpu().numpy())
+
+        energies = np.concatenate(all_energies)
+        forces_out = np.concatenate(all_forces, axis=0) if forces else None
+        return energies, forces_out
+
+    def _calcSPEnergyBatchedAIMNet2(self, mol, conformer_ids, gpu_batch_size=256):
+        """Compute SP energies for multiple conformers in one or more GPU batches."""
+        atom_numbers = np.array([atom.GetAtomicNum() for atom in mol.GetAtoms()])
+        N = len(atom_numbers)
+        B = len(conformer_ids)
+
+        positions = np.zeros((B, N, 3), dtype=np.float32)
+        for i, conf_id in enumerate(conformer_ids):
+            positions[i] = mol.GetConformer(conf_id).GetPositions()
+
+        energies, _ = self._aimnet2_batch_eval(
+            positions, atom_numbers, forces=False, gpu_batch_size=gpu_batch_size
+        )
+
+        results = []
+        for i, conf_id in enumerate(conformer_ids):
+            ase_atoms = self._rwConformer2AseAtoms(mol, conf_id)
+            e = self._reportedCalculatorEnergy(ase_atoms, float(energies[i]))
+            results.append((e, ase_atoms))
+        return results
+
+    def _geomOptimizationBatchedAIMNet2(self, mol, conformer_ids, gpu_batch_size=256):
+        """Optimize conformers via batched AIMNet2 GPU calls with vectorized FIRE.
+
+        All active conformers share one GPU forward pass per step. Converged
+        conformers are dropped from the active set early to save compute.
+        Returns list of (energy, ase_atoms) in the same order as conformer_ids.
+        """
+        atom_numbers = np.array([atom.GetAtomicNum() for atom in mol.GetAtoms()])
+        N = len(atom_numbers)
+        B = len(conformer_ids)
+
+        positions = np.zeros((B, N, 3), dtype=np.float64)
+        for i, conf_id in enumerate(conformer_ids):
+            positions[i] = mol.GetConformer(conf_id).GetPositions()
+
+        # FIRE state — one entry per conformer
+        v = np.zeros((B, N, 3))
+        dt = np.full(B, 0.1)
+        alpha = np.full(B, 0.1)
+        n_pos = np.zeros(B, dtype=np.int32)
+        dt_max = 1.0; N_min = 5; f_inc = 1.1; f_dec = 0.5
+        a_start = 0.1; f_alpha = 0.99
+        maxmove = 0.2  # Å per atom per step
+
+        converged = np.zeros(B, dtype=bool)
+        last_energies = np.zeros(B)
+
+        print(f"Batched GPU FIRE: {B} conformers, sub-batch={gpu_batch_size}, "
+              f"fmax={self.fmax}, maxiter={self.maxiter}")
+
+        for step in range(self.maxiter):
+            active = np.where(~converged)[0]
+            if len(active) == 0:
+                break
+
+            pos_active = positions[active].astype(np.float32)
+            energies_a, forces_a = self._aimnet2_batch_eval(
+                pos_active, atom_numbers, forces=True, gpu_batch_size=gpu_batch_size
+            )
+            forces_a = forces_a.astype(np.float64)
+
+            last_energies[active] = energies_a
+
+            # Convergence: max per-atom force per conformer
+            fmax_per = np.sqrt((forces_a ** 2).sum(axis=2)).max(axis=1)
+            newly_conv_local = fmax_per < self.fmax
+            converged[active[newly_conv_local]] = True
+
+            still_active = active[~newly_conv_local]
+            if len(still_active) == 0:
+                break
+
+            if (step + 1) % 50 == 0:
+                print(f"  Step {step+1}: {converged.sum()}/{B} converged, "
+                      f"fmax_max={fmax_per.max():.4f}")
+
+            # Vectorized FIRE update for still-active conformers
+            fa = forces_a[~newly_conv_local]
+            va = v[still_active]
+            dta = dt[still_active]
+            alpa = alpha[still_active]
+            npa = n_pos[still_active]
+
+            # Velocity half-step then FIRE mixing
+            va += dta[:, None, None] * fa
+
+            P = (fa * va).sum(axis=(1, 2))
+
+            v_norm = np.sqrt((va ** 2).sum(axis=(1, 2)))
+            f_norm = np.sqrt((fa ** 2).sum(axis=(1, 2)))
+            safe = f_norm > 1e-10
+            mix = np.where(safe, v_norm / np.where(safe, f_norm, 1.0), 0.0)
+            va = ((1.0 - alpa[:, None, None]) * va
+                  + alpa[:, None, None] * mix[:, None, None] * fa)
+
+            pos_mask = P > 0
+            neg_mask = ~pos_mask
+            npa = np.where(pos_mask, npa + 1, npa)
+            grow = pos_mask & (npa > N_min)
+            dta = np.where(grow, np.minimum(dta * f_inc, dt_max), dta)
+            alpa = np.where(grow, alpa * f_alpha, alpa)
+            va = np.where(neg_mask[:, None, None], 0.0, va)
+            dta = np.where(neg_mask, dta * f_dec, dta)
+            alpa = np.where(neg_mask, a_start, alpa)
+            npa = np.where(neg_mask, 0, npa)
+
+            # Position update with per-atom maxmove clipping
+            step_vec = dta[:, None, None] * va
+            atom_step_norms = np.sqrt((step_vec ** 2).sum(axis=2))  # [B_s, N]
+            max_atom_step = atom_step_norms.max(axis=1, keepdims=True)  # [B_s, 1]
+            scale = np.where(max_atom_step > maxmove,
+                             maxmove / np.where(max_atom_step > maxmove, max_atom_step, 1.0),
+                             1.0)  # [B_s, 1]
+            positions[still_active] += step_vec * scale[:, :, None]
+
+            v[still_active] = va
+            dt[still_active] = dta
+            alpha[still_active] = alpa
+            n_pos[still_active] = npa
+
+        n_conv = int(converged.sum())
+        if n_conv < B:
+            print(f"  Warning: {B - n_conv}/{B} conformers did not converge "
+                  f"within {self.maxiter} steps")
+        print(f"  Batched FIRE done: {n_conv}/{B} converged")
+
+        results = []
+        for i, conf_id in enumerate(conformer_ids):
+            ase_atoms = Atoms(atom_numbers.tolist(), positions[i])
+            e = self._reportedCalculatorEnergy(ase_atoms, float(last_energies[i]))
+            results.append((e, ase_atoms))
+        return results
 
     def geomOptimization(self, fix_heavy_atoms=False):
         from ase.calculators.gaussian import GaussianOptimizer
