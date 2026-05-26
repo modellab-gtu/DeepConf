@@ -900,6 +900,10 @@ class confGen:
                     pbar.update(len(batch_ids))
             _sp_energy_cache = {cid: e for cid, (e, _) in zip(all_conf_ids_flat, _sp_batch)}
 
+        total_sp_confs = sum(len(v) for v in cluster_conf_id.values())
+        sp_pbar = None if (_sp_energy_cache is not None or mmCalculator) else \
+            __import__("tqdm").tqdm(total=total_sp_confs, desc="SP energies", unit="conf")
+
         for cluster, clustered_confIds in cluster_conf_id.items():
 
             if saveConfs:
@@ -921,6 +925,8 @@ class confGen:
                     e = _sp_energy_cache[conformerId]
                 else:
                     e, _ = self._calcSPEnergy(mol, conformerId)
+                    if sp_pbar is not None:
+                        sp_pbar.update(1)
 
                 if saveConfs:
                     self._writeConf2File(mol, conformerId, conf_file_path, Energy=e)
@@ -950,6 +956,8 @@ class confGen:
             picked_confs = [minEConformerID] + rndConformerIDs
             all_picked_confs += picked_confs
 
+        if sp_pbar is not None:
+            sp_pbar.close()
         # test
         assert len(minEConformerIDs) == len(cluster_conf_id.keys())
         # close to csv file
@@ -978,8 +986,10 @@ class confGen:
                 conf_results = self._calcSPEnergyBatchedAIMNet2(mol, conf_ids_list,
                                                                  gpu_batch_size=gpu_batch_size)
         else:
+            from tqdm import tqdm
+            desc = "FIRE optimizing" if optimization_conf else "SP energies"
             conf_results = []
-            for conformerId in conf_ids_list:
+            for conformerId in tqdm(conf_ids_list, desc=desc, unit="conf"):
                 if optimization_conf:
                     conf_results.append(self._geomOptimizationConf(mol, conformerId))
                 else:
