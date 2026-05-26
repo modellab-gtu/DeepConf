@@ -503,7 +503,9 @@ def run_one(args, label, route, mol_key, mol_info, source_sdf, output_root,
     cmd = build_command(args, input_dir, route, mol_info, extra_md_traj)
 
     fail_calcs = (mol_info.get("expected_fail_calculators") or set())
-    expected_fail = args.calculator in fail_calcs
+    # Route 1 (no_output_expected) never calls the calculator, so incompatible
+    # element sets don't apply — always expect success there.
+    expected_fail = (args.calculator in fail_calcs) and not route.get("no_output_expected", False)
 
     start = time.time()
     try:
