@@ -14,7 +14,7 @@ import numpy as np
 import pandas as pd
 
 from multiprocessing import Pool, cpu_count
-from itertools import product
+from itertools import product, repeat
 from functools import wraps
 
 from scipy.cluster.vq import kmeans, vq, whiten
@@ -50,23 +50,6 @@ def calcFuncRunTime(func):
         print(f"Function {func.__name__} executed in {(time.time()-s_time)/60:.5f} m")
     return wrapper
 
-
-# Module-level state for Pool initializer — avoids pickling mol_list per task.
-_worker_mol_list = None
-
-def _init_mol_list(mol_list):
-    global _worker_mol_list
-    _worker_mol_list = mol_list
-    # Each worker needs only 1 thread — torch inherits the parent's thread pool
-    # (16+ threads by default), causing massive oversubscription across 64 workers.
-    try:
-        import torch
-        torch.set_num_threads(1)
-    except ImportError:
-        pass
-
-def _calcRMSDsymm_worker(pair_idx):
-    return calcRMSDsymm(pair_idx, _worker_mol_list)
 
 
 def calcRMSDsymm(pair_idx, mol_list):
@@ -114,15 +97,13 @@ def getDistMatrix(mol_list, conformerIds=None, nprocs=None, chunk_size=4000):
     if nprocs is None or nprocs <= 0:
         nprocs = NPROCS_ALL
 
-    # Distribute work evenly: cap user chunk_size so we get at least nprocs*4 chunks.
-    n_total = n_mol * n_mol
-    effective_chunk = min(chunk_size, max(1, n_total // (nprocs * 4)))
+    print(f"RMSD matrix calculation using {nprocs} processes; pool chunksize={chunk_size}")
 
-    print(f"RMSD matrix calculation using {nprocs} processes; pool chunksize={effective_chunk}")
-
-    pairs = list(product(range(n_mol), repeat=2))
-    with Pool(nprocs, initializer=_init_mol_list, initargs=(mol_list,)) as pool:
-        results = pool.map(_calcRMSDsymm_worker, pairs, chunksize=effective_chunk)
+    with Pool(nprocs) as pool:
+        results = pool.starmap(calcRMSDsymm,
+                               zip(product(range(n_mol), repeat=2),
+                                   repeat(mol_list)),
+                               chunksize=chunk_size)
 
     ordered_all_rmsd = [result for result in results if result is not None]
     expected = n_mol * (n_mol - 1) // 2
