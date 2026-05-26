@@ -269,7 +269,7 @@ bash runConfGen.sh
 | --- | --- | --- |
 | `ligPrep_DIR` | `$HOME/DeepConf` | Absolute path to the DeepConf repository. The script runs `$ligPrep_DIR/runConfGen.py` and uses `$ligPrep_DIR/all_NNP_MODELS` for bundled NequIP models. |
 | `PYTHON_DIR` | `$HOME/.local/Miniconda3/envs/ANI_AIMNet_NeQuIP/bin` | Directory containing the Python executable for the DeepConf environment. The script runs `$PYTHON_DIR/python`. |
-| `struct_dir` | `./test` | Directory containing input ligand files. Each file in this folder is processed. Hidden files are ignored. |
+| `struct_dir` | `./structures` | Directory containing input ligand files. Each file in this folder is processed. Hidden files are ignored. |
 | `verbose` | `yes` | `yes` keeps all folders and intermediate files. `no` copies the final SDF to the run directory as `<file_base>_output.sdf` and removes each ligand work folder. |
 
 ### Workflow Switches
