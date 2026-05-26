@@ -885,10 +885,11 @@ class confGen:
         # Pre-compute all SP energies in GPU batches when AIMNet2 is active.
         # This replaces N_conformers serial GPU calls with ceil(N/gpu_batch_size) batched calls.
         _sp_energy_cache = None
+        gpu_batch_size = 256
         if not mmCalculator and self._is_aimnet2_calculator():
             from tqdm import tqdm
+            gpu_batch_size = self._auto_gpu_batch_size(mol)
             all_conf_ids_flat = [cid for cids in cluster_conf_id.values() for cid in cids]
-            gpu_batch_size = 256
             n_batches = (len(all_conf_ids_flat) + gpu_batch_size - 1) // gpu_batch_size
             print(f"Batched GPU SP: {len(all_conf_ids_flat)} conformers ({n_batches} GPU batches)")
             _sp_batch = []
@@ -970,10 +971,12 @@ class confGen:
         if self._is_aimnet2_calculator():
             if optimization_conf:
                 print(f"Batched GPU FIRE optimization: {len(conf_ids_list)} conformers")
-                conf_results = self._geomOptimizationBatchedAIMNet2(mol, conf_ids_list)
+                conf_results = self._geomOptimizationBatchedAIMNet2(mol, conf_ids_list,
+                                                                     gpu_batch_size=gpu_batch_size)
             else:
                 print(f"Batched GPU SP energies: {len(conf_ids_list)} picked conformers")
-                conf_results = self._calcSPEnergyBatchedAIMNet2(mol, conf_ids_list)
+                conf_results = self._calcSPEnergyBatchedAIMNet2(mol, conf_ids_list,
+                                                                 gpu_batch_size=gpu_batch_size)
         else:
             conf_results = []
             for conformerId in conf_ids_list:
@@ -1357,6 +1360,40 @@ class confGen:
 
         e = self._reportedCalculatorEnergy(ase_atoms, ase_atoms.get_potential_energy())
         return e, ase_atoms
+
+    def _auto_gpu_batch_size(self, mol, safety_factor=0.5, max_batch=2048, min_batch=16):
+        """Probe GPU memory with one conformer forward pass and compute safe batch size."""
+        import torch
+        try:
+            device = self.calculator.base_calc.device
+            if not str(device).startswith("cuda"):
+                return min_batch
+
+            atom_numbers = np.array([atom.GetAtomicNum() for atom in mol.GetAtoms()])
+            conf_ids = [c.GetId() for c in mol.GetConformers()]
+            pos_probe = mol.GetConformer(conf_ids[0]).GetPositions().astype(np.float32)[np.newaxis]
+
+            torch.cuda.empty_cache()
+            torch.cuda.reset_peak_memory_stats(device)
+            baseline = torch.cuda.memory_allocated(device)
+
+            self._aimnet2_batch_eval(pos_probe, atom_numbers, forces=True, gpu_batch_size=1)
+            torch.cuda.synchronize(device)
+
+            peak = torch.cuda.max_memory_allocated(device)
+            mem_per_conf = max(1, peak - baseline)
+
+            torch.cuda.empty_cache()
+            free, total = torch.cuda.mem_get_info(device)
+            batch_size = int(free * safety_factor) // mem_per_conf
+            batch_size = max(min_batch, min(max_batch, batch_size))
+
+            print(f"GPU auto batch: {free/1e9:.1f}/{total/1e9:.1f}GB free, "
+                  f"{mem_per_conf/1e6:.1f}MB/conf -> batch_size={batch_size}")
+            return batch_size
+        except Exception as e:
+            print(f"GPU batch auto-detect failed ({e}), using {min_batch}")
+            return min_batch
 
     def _is_aimnet2_calculator(self):
         try:
