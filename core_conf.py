@@ -57,6 +57,13 @@ _worker_mol_list = None
 def _init_mol_list(mol_list):
     global _worker_mol_list
     _worker_mol_list = mol_list
+    # Each worker needs only 1 thread — torch inherits the parent's thread pool
+    # (16+ threads by default), causing massive oversubscription across 64 workers.
+    try:
+        import torch
+        torch.set_num_threads(1)
+    except ImportError:
+        pass
 
 def _calcRMSDsymm_worker(pair_idx):
     return calcRMSDsymm(pair_idx, _worker_mol_list)
