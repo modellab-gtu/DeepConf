@@ -882,11 +882,10 @@ class confGen:
         minEConformerIDs = []
         all_picked_confs = []
 
-        # Pre-compute all SP energies in GPU batches when AIMNet2 is active.
-        # This replaces N_conformers serial GPU calls with ceil(N/gpu_batch_size) batched calls.
+        # Pre-compute all SP energies in GPU batches when a GPU calculator is active.
         _sp_energy_cache = None
         gpu_batch_size = 256
-        if not mmCalculator and self._is_aimnet2_calculator():
+        if not mmCalculator and (self._is_aimnet2_calculator() or self._is_nequip_calculator()):
             from tqdm import tqdm
             gpu_batch_size = self._auto_gpu_batch_size(mol)
             all_conf_ids_flat = [cid for cids in cluster_conf_id.values() for cid in cids]
@@ -896,7 +895,11 @@ class confGen:
             with tqdm(total=len(all_conf_ids_flat), desc="SP energies", unit="conf") as pbar:
                 for start in range(0, len(all_conf_ids_flat), gpu_batch_size):
                     batch_ids = all_conf_ids_flat[start:start + gpu_batch_size]
-                    _sp_batch.extend(self._calcSPEnergyBatchedAIMNet2(mol, batch_ids))
+                    if self._is_aimnet2_calculator():
+                        _sp_batch.extend(self._calcSPEnergyBatchedAIMNet2(mol, batch_ids))
+                    else:
+                        _sp_batch.extend(self._calcSPEnergyBatchedNequIP(mol, batch_ids,
+                                                                          gpu_batch_size=gpu_batch_size))
                     pbar.update(len(batch_ids))
             _sp_energy_cache = {cid: e for cid, (e, _) in zip(all_conf_ids_flat, _sp_batch)}
 
@@ -985,6 +988,15 @@ class confGen:
                 print(f"Batched GPU SP energies: {len(conf_ids_list)} picked conformers")
                 conf_results = self._calcSPEnergyBatchedAIMNet2(mol, conf_ids_list,
                                                                  gpu_batch_size=gpu_batch_size)
+        elif self._is_nequip_calculator():
+            if optimization_conf:
+                print(f"Batched GPU FIRE optimization (NequIP): {len(conf_ids_list)} conformers")
+                conf_results = self._geomOptimizationBatchedNequIP(mol, conf_ids_list,
+                                                                    gpu_batch_size=gpu_batch_size)
+            else:
+                print(f"Batched GPU SP energies (NequIP): {len(conf_ids_list)} picked conformers")
+                conf_results = self._calcSPEnergyBatchedNequIP(mol, conf_ids_list,
+                                                                gpu_batch_size=gpu_batch_size)
         else:
             from tqdm import tqdm
             desc = "FIRE optimizing" if optimization_conf else "SP energies"
@@ -1375,20 +1387,32 @@ class confGen:
         """Probe GPU memory with one conformer forward pass and compute safe batch size."""
         import torch
         try:
-            device = self.calculator.base_calc.device
-            if not str(device).startswith("cuda"):
-                return min_batch
+            if self._is_nequip_calculator():
+                device = self.calculator.device
+                if not str(device).startswith("cuda"):
+                    return min_batch
+                chemical_symbols = self._nequip_chemical_symbols(mol)
+                conf_ids = [c.GetId() for c in mol.GetConformers()]
+                pos_probe = mol.GetConformer(conf_ids[0]).GetPositions()[np.newaxis].astype(np.float64)
 
-            atom_numbers = np.array([atom.GetAtomicNum() for atom in mol.GetAtoms()])
-            conf_ids = [c.GetId() for c in mol.GetConformers()]
-            pos_probe = mol.GetConformer(conf_ids[0]).GetPositions().astype(np.float32)[np.newaxis]
+                torch.cuda.empty_cache()
+                torch.cuda.reset_peak_memory_stats(device)
+                baseline = torch.cuda.memory_allocated(device)
+                self._nequip_batch_eval(pos_probe, chemical_symbols, forces=True, gpu_batch_size=1)
+                torch.cuda.synchronize(device)
+            else:
+                device = self.calculator.base_calc.device
+                if not str(device).startswith("cuda"):
+                    return min_batch
+                atom_numbers = np.array([atom.GetAtomicNum() for atom in mol.GetAtoms()])
+                conf_ids = [c.GetId() for c in mol.GetConformers()]
+                pos_probe = mol.GetConformer(conf_ids[0]).GetPositions().astype(np.float32)[np.newaxis]
 
-            torch.cuda.empty_cache()
-            torch.cuda.reset_peak_memory_stats(device)
-            baseline = torch.cuda.memory_allocated(device)
-
-            self._aimnet2_batch_eval(pos_probe, atom_numbers, forces=True, gpu_batch_size=1)
-            torch.cuda.synchronize(device)
+                torch.cuda.empty_cache()
+                torch.cuda.reset_peak_memory_stats(device)
+                baseline = torch.cuda.memory_allocated(device)
+                self._aimnet2_batch_eval(pos_probe, atom_numbers, forces=True, gpu_batch_size=1)
+                torch.cuda.synchronize(device)
 
             peak = torch.cuda.max_memory_allocated(device)
             mem_per_conf = max(1, peak - baseline)
@@ -1477,36 +1501,25 @@ class confGen:
             results.append((e, ase_atoms))
         return results
 
-    def _geomOptimizationBatchedAIMNet2(self, mol, conformer_ids, gpu_batch_size=256):
-        """Optimize conformers via batched AIMNet2 GPU calls with vectorized FIRE.
+    def _vectorized_fire_optimization(self, positions, eval_fn):
+        """Vectorized FIRE optimizer shared by AIMNet2 and NequIP batched paths.
 
-        All active conformers share one GPU forward pass per step. Converged
-        conformers are dropped from the active set early to save compute.
-        Returns list of (energy, ase_atoms) in the same order as conformer_ids.
+        positions: float64 [B, N, 3], updated in-place.
+        eval_fn(pos_f32 [B_active, N, 3]) -> (energies [B_active], forces [B_active, N, 3])
+        Returns (converged [B], last_energies [B]).
         """
-        atom_numbers = np.array([atom.GetAtomicNum() for atom in mol.GetAtoms()])
-        N = len(atom_numbers)
-        B = len(conformer_ids)
-
-        positions = np.zeros((B, N, 3), dtype=np.float64)
-        for i, conf_id in enumerate(conformer_ids):
-            positions[i] = mol.GetConformer(conf_id).GetPositions()
-
-        # FIRE state — one entry per conformer
+        from tqdm import tqdm
+        B, N, _ = positions.shape
         v = np.zeros((B, N, 3))
         dt = np.full(B, 0.1)
         alpha = np.full(B, 0.1)
         n_pos = np.zeros(B, dtype=np.int32)
         dt_max = 1.0; N_min = 5; f_inc = 1.1; f_dec = 0.5
         a_start = 0.1; f_alpha = 0.99
-        maxmove = 0.2  # Å per atom per step
+        maxmove = 0.2
 
         converged = np.zeros(B, dtype=bool)
         last_energies = np.zeros(B)
-
-        from tqdm import tqdm
-        print(f"Batched GPU FIRE: {B} conformers, sub-batch={gpu_batch_size}, "
-              f"fmax={self.fmax}, maxiter={self.maxiter}")
 
         pbar = tqdm(total=B, desc="FIRE converged", unit="conf")
         for step in range(self.maxiter):
@@ -1515,14 +1528,10 @@ class confGen:
                 break
 
             pos_active = positions[active].astype(np.float32)
-            energies_a, forces_a = self._aimnet2_batch_eval(
-                pos_active, atom_numbers, forces=True, gpu_batch_size=gpu_batch_size
-            )
+            energies_a, forces_a = eval_fn(pos_active)
             forces_a = forces_a.astype(np.float64)
-
             last_energies[active] = energies_a
 
-            # Convergence: max per-atom force per conformer
             fmax_per = np.sqrt((forces_a ** 2).sum(axis=2)).max(axis=1)
             newly_conv_local = fmax_per < self.fmax
             n_newly = int(newly_conv_local.sum())
@@ -1536,18 +1545,14 @@ class confGen:
             if len(still_active) == 0:
                 break
 
-            # Vectorized FIRE update for still-active conformers
             fa = forces_a[~newly_conv_local]
             va = v[still_active]
             dta = dt[still_active]
             alpa = alpha[still_active]
             npa = n_pos[still_active]
 
-            # Velocity half-step then FIRE mixing
             va += dta[:, None, None] * fa
-
             P = (fa * va).sum(axis=(1, 2))
-
             v_norm = np.sqrt((va ** 2).sum(axis=(1, 2)))
             f_norm = np.sqrt((fa ** 2).sum(axis=(1, 2)))
             safe = f_norm > 1e-10
@@ -1566,13 +1571,12 @@ class confGen:
             alpa = np.where(neg_mask, a_start, alpa)
             npa = np.where(neg_mask, 0, npa)
 
-            # Position update with per-atom maxmove clipping
             step_vec = dta[:, None, None] * va
-            atom_step_norms = np.sqrt((step_vec ** 2).sum(axis=2))  # [B_s, N]
-            max_atom_step = atom_step_norms.max(axis=1, keepdims=True)  # [B_s, 1]
+            atom_step_norms = np.sqrt((step_vec ** 2).sum(axis=2))
+            max_atom_step = atom_step_norms.max(axis=1, keepdims=True)
             scale = np.where(max_atom_step > maxmove,
                              maxmove / np.where(max_atom_step > maxmove, max_atom_step, 1.0),
-                             1.0)  # [B_s, 1]
+                             1.0)
             positions[still_active] += step_vec * scale[:, :, None]
 
             v[still_active] = va
@@ -1586,10 +1590,171 @@ class confGen:
             print(f"  Warning: {B - n_conv}/{B} conformers did not converge "
                   f"within {self.maxiter} steps")
         print(f"  Batched FIRE done: {n_conv}/{B} converged")
+        return converged, last_energies
+
+    def _geomOptimizationBatchedAIMNet2(self, mol, conformer_ids, gpu_batch_size=256):
+        """Optimize conformers via batched AIMNet2 GPU calls with vectorized FIRE."""
+        atom_numbers = np.array([atom.GetAtomicNum() for atom in mol.GetAtoms()])
+        N = len(atom_numbers)
+        B = len(conformer_ids)
+
+        positions = np.zeros((B, N, 3), dtype=np.float64)
+        for i, conf_id in enumerate(conformer_ids):
+            positions[i] = mol.GetConformer(conf_id).GetPositions()
+
+        print(f"Batched GPU FIRE: {B} conformers, sub-batch={gpu_batch_size}, "
+              f"fmax={self.fmax}, maxiter={self.maxiter}")
+
+        def eval_fn(pos_active):
+            return self._aimnet2_batch_eval(
+                pos_active, atom_numbers, forces=True, gpu_batch_size=gpu_batch_size
+            )
+
+        _, last_energies = self._vectorized_fire_optimization(positions, eval_fn)
 
         results = []
         for i, conf_id in enumerate(conformer_ids):
             ase_atoms = Atoms(atom_numbers.tolist(), positions[i])
+            e = self._reportedCalculatorEnergy(ase_atoms, float(last_energies[i]))
+            results.append((e, ase_atoms))
+        return results
+
+    def _is_nequip_calculator(self):
+        try:
+            from nequip.ase import NequIPCalculator
+            return isinstance(self.calculator, NequIPCalculator)
+        except ImportError:
+            return False
+
+    def _nequip_chemical_symbols(self, mol):
+        from ase.data import chemical_symbols as ase_sym
+        return [ase_sym[atom.GetAtomicNum()] for atom in mol.GetAtoms()]
+
+    def _nequip_build_graph(self, chemical_symbols, positions_angstrom):
+        """Build one NequIP AtomicData dict for a single conformer."""
+        from nequip.data import AtomicData, AtomicDataDict
+        from ase import Atoms as AseAtoms
+        atoms = AseAtoms(symbols=chemical_symbols, positions=positions_angstrom)
+        data = AtomicData.from_ase(atoms, r_max=self.calculator.r_max)
+        data = self.calculator.transform(data)
+        return AtomicData.to_AtomicDataDict(data)
+
+    def _nequip_make_batch(self, data_dicts):
+        """Concatenate per-conformer graph dicts into one batched dict."""
+        import torch
+        B = len(data_dicts)
+        pos_list, types_list, edge_idx_list, shifts_list, batch_list = [], [], [], [], []
+        node_offset = 0
+        for i, d in enumerate(data_dicts):
+            n = d['pos'].shape[0]
+            pos_list.append(d['pos'])
+            types_list.append(d['atom_types'])
+            edge_idx_list.append(d['edge_index'] + node_offset)
+            shifts_list.append(d['edge_cell_shift'])
+            batch_list.append(torch.full((n,), i, dtype=torch.long))
+            node_offset += n
+        ptr = torch.zeros(B + 1, dtype=torch.long)
+        for i, d in enumerate(data_dicts):
+            ptr[i + 1] = ptr[i] + d['pos'].shape[0]
+        return {
+            'pos': torch.cat(pos_list, dim=0),
+            'atom_types': torch.cat(types_list, dim=0),
+            'edge_index': torch.cat(edge_idx_list, dim=1),
+            'edge_cell_shift': torch.cat(shifts_list, dim=0),
+            'cell': data_dicts[0]['cell'],
+            'pbc': data_dicts[0]['pbc'],
+            'batch': torch.cat(batch_list, dim=0),
+            'ptr': ptr,
+        }
+
+    def _nequip_batch_eval(self, positions_np, chemical_symbols, forces=True, gpu_batch_size=16):
+        """Batched NequIP forward pass.
+
+        positions_np: float64 [B, N, 3]
+        Returns (energies [B], forces [B, N, 3]) or (energies [B], None).
+        """
+        import torch
+        from nequip.data import AtomicDataDict
+        device = self.calculator.device
+        B_total, N, _ = positions_np.shape
+
+        all_energies = []
+        all_forces = [] if forces else None
+
+        for start in range(0, B_total, gpu_batch_size):
+            end = min(start + gpu_batch_size, B_total)
+            Bsub = end - start
+
+            data_dicts = [
+                self._nequip_build_graph(chemical_symbols, positions_np[i])
+                for i in range(start, end)
+            ]
+            batched = self._nequip_make_batch(data_dicts)
+            batched = {k: v.to(device) if isinstance(v, torch.Tensor) else v
+                       for k, v in batched.items()}
+
+            # NequIP uses autograd.grad internally for forces — cannot use no_grad()
+            out = self.calculator.model(batched)
+
+            energies = out[AtomicDataDict.TOTAL_ENERGY_KEY].detach().cpu()
+            if energies.dim() > 1:
+                energies = energies.squeeze(-1)
+            all_energies.append(energies.numpy().astype(np.float64))
+
+            if forces:
+                f = out[AtomicDataDict.FORCE_KEY].detach().cpu().numpy()
+                all_forces.append(f.reshape(Bsub, N, 3).astype(np.float64))
+
+        energies_out = np.concatenate(all_energies)
+        forces_out = np.concatenate(all_forces, axis=0) if forces else None
+        return energies_out, forces_out
+
+    def _calcSPEnergyBatchedNequIP(self, mol, conformer_ids, gpu_batch_size=16):
+        """SP energies for multiple conformers batched through NequIP."""
+        chemical_symbols = self._nequip_chemical_symbols(mol)
+        N = mol.GetNumAtoms()
+        B = len(conformer_ids)
+
+        positions = np.zeros((B, N, 3), dtype=np.float64)
+        for i, conf_id in enumerate(conformer_ids):
+            positions[i] = mol.GetConformer(conf_id).GetPositions()
+
+        energies, _ = self._nequip_batch_eval(
+            positions, chemical_symbols, forces=False, gpu_batch_size=gpu_batch_size
+        )
+
+        results = []
+        for i, conf_id in enumerate(conformer_ids):
+            ase_atoms = self._rwConformer2AseAtoms(mol, conf_id)
+            e = self._reportedCalculatorEnergy(ase_atoms, float(energies[i]))
+            results.append((e, ase_atoms))
+        return results
+
+    def _geomOptimizationBatchedNequIP(self, mol, conformer_ids, gpu_batch_size=16):
+        """Optimize conformers via batched NequIP GPU calls with vectorized FIRE."""
+        from ase import Atoms as AseAtoms
+        chemical_symbols = self._nequip_chemical_symbols(mol)
+        N = mol.GetNumAtoms()
+        B = len(conformer_ids)
+
+        positions = np.zeros((B, N, 3), dtype=np.float64)
+        for i, conf_id in enumerate(conformer_ids):
+            positions[i] = mol.GetConformer(conf_id).GetPositions()
+
+        print(f"Batched GPU FIRE (NequIP): {B} conformers, sub-batch={gpu_batch_size}, "
+              f"fmax={self.fmax}, maxiter={self.maxiter}")
+
+        def eval_fn(pos_active):
+            return self._nequip_batch_eval(
+                pos_active.astype(np.float64), chemical_symbols,
+                forces=True, gpu_batch_size=gpu_batch_size
+            )
+
+        _, last_energies = self._vectorized_fire_optimization(positions, eval_fn)
+
+        results = []
+        for i, conf_id in enumerate(conformer_ids):
+            ase_atoms = AseAtoms(symbols=chemical_symbols, positions=positions[i])
             e = self._reportedCalculatorEnergy(ase_atoms, float(last_energies[i]))
             results.append((e, ase_atoms))
         return results
