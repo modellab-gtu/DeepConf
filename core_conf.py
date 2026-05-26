@@ -51,6 +51,12 @@ def calcFuncRunTime(func):
     return wrapper
 
 
+# Module-level ref set before Pool fork so workers inherit via COW — no per-task pickling.
+_rmsd_mol_ref = None
+
+def _calcRMSDsymm_global(pair_idx):
+    return calcRMSDsymm(pair_idx, _rmsd_mol_ref)
+
 
 def calcRMSDsymm(pair_idx, mol_list):
 
@@ -97,15 +103,32 @@ def getDistMatrix(mol_list, conformerIds=None, nprocs=None, chunk_size=4000):
     if nprocs is None or nprocs <= 0:
         nprocs = NPROCS_ALL
 
-    print(f"RMSD matrix calculation using {nprocs} processes; pool chunksize={chunk_size}")
+    # chunk_size controls how many pair indices are batched per worker dispatch.
+    # Too small → high IPC overhead. Too large → poor load balancing at the end.
+    # Rule of thumb: n_mol² / (nprocs × 4) pairs per chunk keeps all workers busy
+    # with minimal overhead. For small n_mol the formula below caps it so every
+    # worker still gets work; for large n_mol (e.g. 21870²=478M) the user-supplied
+    # value (default 4000) is used directly and gives ~120 K chunks across 64 workers.
+    effective_chunk = min(chunk_size, max(1, n_mol * n_mol // (nprocs * 4)))
 
+    n_pairs = n_mol * n_mol
+    print(f"RMSD matrix calculation using {nprocs} processes; "
+          f"pool chunksize={effective_chunk} ({n_pairs:,} pairs total)")
+
+    from tqdm import tqdm
+    global _rmsd_mol_ref
+    _rmsd_mol_ref = mol_list  # set before fork — workers inherit via COW, no per-task pickling
     with Pool(nprocs) as pool:
-        results = pool.starmap(calcRMSDsymm,
-                               zip(product(range(n_mol), repeat=2),
-                                   repeat(mol_list)),
-                               chunksize=chunk_size)
-
-    ordered_all_rmsd = [result for result in results if result is not None]
+        result_iter = pool.imap(_calcRMSDsymm_global,
+                                product(range(n_mol), repeat=2),
+                                chunksize=effective_chunk)
+        ordered_all_rmsd = [r for r in tqdm(result_iter,
+                                             total=n_pairs,
+                                             desc="RMSD pairs",
+                                             unit="pair",
+                                             miniters=effective_chunk)
+                            if r is not None]
+    _rmsd_mol_ref = None
     expected = n_mol * (n_mol - 1) // 2
     if len(ordered_all_rmsd) != expected:
         raise RuntimeError(
@@ -770,6 +793,7 @@ class confGen:
             pass
         elif ETKDG:
             ps = rdkit.Chem.rdDistGeom.ETKDGv3()
+            ps.numThreads = NPROCS_ALL
             conformerIds = list(rdkit.Chem.rdDistGeom.EmbedMultipleConfs(
                 mol,
                 numConfs,
