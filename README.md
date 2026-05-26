@@ -495,6 +495,82 @@ timings.csv
 failed_files.csv
 ```
 
+## Testing
+
+The repository ships a validation test matrix at `scripts/run_deepconf_test_matrix.py` that covers all supported workflows and calculators.
+
+### Molecule library
+
+Ten molecules are tested covering the relevant combinations:
+
+| Key | Molecule | Elements | Torsions | Explicit H |
+|-----|----------|----------|----------|------------|
+| `chno_rigid` | Acetaminophen | CHNO | ~2 | yes |
+| `chno_rigid_noh` | Acetaminophen | CHNO | ~2 | no |
+| `chno_flex` | 6-Aminohexanoic acid | CHNO | ~5 | yes |
+| `chno_flex_noh` | 6-Aminohexanoic acid | CHNO | ~5 | no |
+| `multi_rigid` | 4-Chlorobenzenesulfonamide | CHNOSCl | ~1 | yes |
+| `multi_rigid_noh` | 4-Chlorobenzenesulfonamide | CHNOSCl | ~1 | no |
+| `multi_flex` | Phosphoserine | CHNOP | ~5 | yes |
+| `multi_flex_noh` | Phosphoserine | CHNOP | ~5 | no |
+| `charged_pos` | Glycinium | CHNO | — | yes (+1) |
+| `charged_neg` | Acetate | CHNO | — | yes (−1) |
+
+`multi_flex` / `multi_flex_noh` contain phosphorus and are expected to fail with ANI2x (P not in training set); all other calculators handle them correctly.
+
+### Processing routes (Step 2)
+
+| Route | Description | Calcs |
+|-------|-------------|-------|
+| Route 1 | Read and write only — no calculation | all 4 |
+| Route 2 | Geometry optimisation only | all 4 |
+| Route 3 | RDKit conformer generation, no NNP opt | all 4 |
+| Route 4 | RDKit conformer generation + NNP conf opt | all 4 |
+| Route 5 | Pre-opt input + conformer generation | all 4 |
+| Route 6 | Pre-opt input + conformer generation + NNP conf opt | all 4 |
+| Route 7 | External MD trajectory as conformer source + NNP/g16 opt | all 4 |
+| Route 8 | Internal ASE Langevin MD + NNP conf opt | ani2x, aimnet2, nequip |
+| Route 9 | Pre-opt input + internal ASE MD + NNP conf opt | ani2x, aimnet2, nequip |
+
+Priority when flags overlap: `run_md > sample_md > genconformer`.
+
+### Initialization tests (Step 1)
+
+Step 1 verifies basic capabilities independently of the processing routes: hydrogen addition, bond-order perception, and charged-molecule handling.
+
+### Running the matrix
+
+```bash
+# Full matrix — all molecules, all routes, one calculator
+python scripts/run_deepconf_test_matrix.py \
+    --calculator aimnet2 \
+    --output-root /tmp/deepconf_test_out
+
+# Subset — specific routes and molecules
+python scripts/run_deepconf_test_matrix.py \
+    --calculator aimnet2 \
+    --routes route4,route6,route8 \
+    --molecules chno_rigid,chno_flex \
+    --output-root /tmp/deepconf_test_out
+
+# Gaussian (g16) — step 2 only, recommended settings
+python scripts/run_deepconf_test_matrix.py \
+    --calculator g16 --step 2 \
+    --nprocs 64 --g16-mem 40GB --g16-level HF --g16-basis 3-21G \
+    --output-root /tmp/deepconf_test_out
+```
+
+Results are written as `test_matrix_report.md` and `test_matrix_report.json` in the output root.
+
+### Validated results
+
+| Calculator | Routes | Cases | Result |
+|------------|--------|-------|--------|
+| aimnet2 (CPU) | 1–9 + Step 1 | 88/88 | ✅ 100% |
+| ani2x (CPU) | 1–9 + Step 1 | 88/88 | ✅ 100% |
+| nequip (CUDA) | 1–9 + Step 1 | 96/96 | ✅ 100% |
+| g16 HF/3-21G | Route 7 | 1/1 | ✅ PASS |
+
 ## Notes
 
 - RMSD clustering uses direct RDKit `GetBestRMS` comparisons with complete linkage by default.
