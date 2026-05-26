@@ -4,7 +4,7 @@ ligPrep_DIR="$HOME/DeepConf"
 PYTHON_DIR="$HOME/.local/Miniconda3/envs/ANI_AIMNet_NeQuIP/bin"
 
 # Set this to your ligand/input directory.
-struct_dir="./test"
+struct_dir="./structures"
 
 # adding hydrogen if missing (yes/no) if yes, constrain heavy atoms and minimize hydrogens.
 add_hydrogen=no
