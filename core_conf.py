@@ -430,6 +430,7 @@ class confGen:
 
     def _getTorsionAnglesForConformers(self, mol, conformerIds):
         from rdkit.Chem import TorsionFingerprints, rdMolTransforms
+        from tqdm import tqdm
         torsion_atoms = []
         for torsions_list in TorsionFingerprints.CalculateTorsionLists(mol):
             for torsions in torsions_list:
@@ -441,7 +442,7 @@ class confGen:
             return np.zeros((len(conformerIds), 0), dtype=np.float32)
 
         features = np.empty((len(conformerIds), 2 * n_t), dtype=np.float32)
-        for ci, cid in enumerate(conformerIds):
+        for ci, cid in enumerate(tqdm(conformerIds, desc="Torsion angles", unit="conf")):
             conf = mol.GetConformer(cid)
             for ti, (i, j, k, l) in enumerate(torsion_atoms):
                 angle_rad = np.deg2rad(rdMolTransforms.GetDihedralDeg(conf, i, j, k, l))
@@ -450,7 +451,6 @@ class confGen:
         return features
 
     def _getClusterKmeansFromTorsions(self, mol, conformerIds, n_group):
-        import time
         from sklearn.cluster import KMeans
         cluster_conf_id = defaultdict(list)
         n_group = min(int(n_group), len(conformerIds))
@@ -458,18 +458,13 @@ class confGen:
             cluster_conf_id[0] = list(conformerIds)
             return cluster_conf_id
 
-        t0 = time.time()
-        print(f"  Extracting torsion angles for {len(conformerIds)} conformers...", flush=True)
         features = self._getTorsionAnglesForConformers(mol, conformerIds)
         if features.shape[1] == 0:
             cluster_conf_id[0] = list(conformerIds)
             return cluster_conf_id
-        print(f"  Torsion features: {features.shape}  ({time.time()-t0:.1f}s)", flush=True)
 
-        t1 = time.time()
-        print(f"  Running KMeans: n_clusters={n_group}, n_init=10...", flush=True)
+        print(f"Running KMeans: {len(conformerIds)} conformers -> {n_group} clusters", flush=True)
         labels = KMeans(n_clusters=n_group, n_init=10, random_state=42).fit_predict(features)
-        print(f"  KMeans done  ({time.time()-t1:.1f}s)", flush=True)
 
         for label, cid in zip(labels, conformerIds):
             cluster_conf_id[int(label)].append(cid)
@@ -1382,11 +1377,11 @@ class confGen:
         all_energies = []
         all_forces = [] if forces else None
 
-        n_batches = (B_total + gpu_batch_size - 1) // gpu_batch_size
-        for batch_idx, start in enumerate(range(0, B_total, gpu_batch_size)):
+        from tqdm import tqdm
+        batch_starts = list(range(0, B_total, gpu_batch_size))
+        for start in tqdm(batch_starts, desc="GPU batches", unit="batch"):
             end = min(start + gpu_batch_size, B_total)
             Bsub = end - start
-            print(f"  GPU batch {batch_idx+1}/{n_batches}: conformers {start+1}-{end}", flush=True)
 
             pos_sub = torch.tensor(positions_np[start:end], dtype=torch.float32)
             t_numbers = torch.tensor(atom_numbers, dtype=torch.int64).unsqueeze(0).expand(Bsub, -1)
