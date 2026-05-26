@@ -57,9 +57,9 @@ caculator_type="aimnet2"
 # - NequIP: set calculator_model to the deployed .pth path for older NequIP,
 #   or to the compiled model path for newer NequIP.
 #   If caculator_type="nequip" and calculator_model is blank, DeepConf uses
-#   the bundled all_NNP_MODELS/G_NequIP.pth model with identity species mapping.
+#   the bundled deepconf/models/G_NequIP.pth model with identity species mapping.
 #   To use another bundled model, set calculator_model="$model_dir/$nequip_model_file".
-model_dir="$ligPrep_DIR/all_NNP_MODELS"
+model_dir="$ligPrep_DIR/deepconf/models"
 nequip_model_file="G_NequIP.pth"
 # Other available local examples:
 # nequip_model_file="G_NequIP_smdW.pth"

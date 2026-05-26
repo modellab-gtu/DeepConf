@@ -68,7 +68,15 @@ pip install nequip==0.6.1
 
 For AIMNet2 details, see [aimnetcentral](https://github.com/isayevlab/aimnetcentral/tree/main).
 
-The in-house NequIP `.pth` model files are bundled under `all_NNP_MODELS/`, so they are available after cloning the repository.
+The in-house NequIP `.pth` model files are bundled under `deepconf/models/`, so they are available after cloning the repository.
+
+To register the `deepconf` console-script entry point, install the package in editable mode from the repo root:
+
+```bash
+pip install -e .
+```
+
+After this, `deepconf --help` works anywhere in the environment. `runConfGen.sh` continues to work without this step.
 
 For Gaussian16 support, make sure the `g16` command is available in your shell environment.
 
@@ -114,7 +122,7 @@ Verify the environment:
 ```bash
 python -c "import numpy, pandas, rdkit, ase, openbabel, torch, torchani, Auto3D, aimnet, nequip; print('DeepConf imports OK')"
 python -c "import torch; print(torch.__version__); print('CUDA available:', torch.cuda.is_available())"
-python -m py_compile runConfGen.py core_conf.py
+python -m py_compile runConfGen.py deepconf/cli.py deepconf/core_conf.py
 ```
 
 `torch.cuda.is_available()` will be `False` on a CPU-only machine; this is expected. ANI, AIMNet2, and NequIP calculations will run on CPU, which is fine for small molecules and testing but significantly slower for production runs.
@@ -159,7 +167,7 @@ Verify the environment:
 ```bash
 python -c "import numpy, pandas, rdkit, ase, openbabel, torch, torchani, Auto3D, aimnet, nequip; print('DeepConf imports OK')"
 python -c "import torch; print(torch.__version__); print('CUDA available:', torch.cuda.is_available())"
-python -m py_compile runConfGen.py core_conf.py
+python -m py_compile runConfGen.py deepconf/cli.py deepconf/core_conf.py
 ```
 
 `torch.__version__` should show `2.6.0+cu124` and `torch.cuda.is_available()` should return `True` if an NVIDIA GPU and driver are present.
@@ -209,7 +217,7 @@ Check the environment:
 
 ```bash
 python -c "import numpy, pandas, rdkit, ase, openbabel, torch, torchani; print('DeepConf core imports OK')"
-python -m py_compile runConfGen.py core_conf.py
+python -m py_compile runConfGen.py deepconf/cli.py deepconf/core_conf.py
 ```
 
 When using `runConfGen.sh` from WSL, set the repository and Python paths to the WSL install locations:
@@ -267,7 +275,7 @@ bash runConfGen.sh
 
 | Option | Current default | Description |
 | --- | --- | --- |
-| `ligPrep_DIR` | `$HOME/DeepConf` | Absolute path to the DeepConf repository. The script runs `$ligPrep_DIR/runConfGen.py` and uses `$ligPrep_DIR/all_NNP_MODELS` for bundled NequIP models. |
+| `ligPrep_DIR` | `$HOME/DeepConf` | Absolute path to the DeepConf repository. The script runs `$ligPrep_DIR/runConfGen.py` and uses `$ligPrep_DIR/deepconf/models` for bundled NequIP models. |
 | `PYTHON_DIR` | `$HOME/.local/Miniconda3/envs/ANI_AIMNet_NeQuIP/bin` | Directory containing the Python executable for the DeepConf environment. The script runs `$PYTHON_DIR/python`. |
 | `struct_dir` | `./structures` | Directory containing input ligand files. Each file in this folder is processed. Hidden files are ignored. |
 | `verbose` | `yes` | `yes` keeps all folders and intermediate files. `no` copies the final SDF to the run directory as `<file_base>_output.sdf` and removes each ligand work folder. |
@@ -302,7 +310,7 @@ Common workflows:
 | Option | Current default | Description |
 | --- | --- | --- |
 | `caculator_type` | `aimnet2` | Calculator choice. The variable name is intentionally kept as `caculator_type` for backward compatibility. Supported values include `ani1x`, `ani1ccx`, `ani2x`, `aimnet2`, `nequip`, `g16`, and `uff`. |
-| `calculator_model` | blank | Optional model name or model path. For AIMNet2, leave blank to use `aimnet2` or set a specific AIMNet model name. For NequIP, leave blank to use the bundled `all_NNP_MODELS/G_NequIP.pth`, or set this to a deployed `.pth` model path or a newer compiled model path. |
+| `calculator_model` | blank | Optional model name or model path. For AIMNet2, leave blank to use `aimnet2` or set a specific AIMNet model name. For NequIP, leave blank to use the bundled `deepconf/models/G_NequIP.pth`, or set this to a deployed `.pth` model path or a newer compiled model path. |
 | `calculator_charge` | blank | AIMNet2 and Gaussian16 total molecular charge. Leave blank to infer the formal charge from the loaded SDF/RDKit molecule. Set an integer such as `-1`, `0`, or `1` to override. |
 | `calculator_multiplicity` | `1` | AIMNet2 and Gaussian16 spin multiplicity. |
 | `calculator_device` | `auto` | Device for NequIP. `auto` selects CUDA when PyTorch sees a GPU, otherwise CPU. You can force `cpu` or `cuda`. |
@@ -325,13 +333,13 @@ Calculator notes:
 The repository includes in-house NequIP model files under:
 
 ```bash
-all_NNP_MODELS/
+deepconf/models/
 ```
 
 `runConfGen.sh` defines:
 
 ```bash
-model_dir="$ligPrep_DIR/all_NNP_MODELS"
+model_dir="$ligPrep_DIR/deepconf/models"
 nequip_model_file="G_NequIP.pth"
 ```
 
@@ -352,14 +360,14 @@ caculator_type="nequip"
 calculator_device=auto
 ```
 
-When `caculator_type="nequip"` and `calculator_model` is blank, DeepConf uses `all_NNP_MODELS/G_NequIP.pth` automatically and applies identity species mapping for the bundled model. To use another bundled model, set `nequip_model_file` and `calculator_model`, for example:
+When `caculator_type="nequip"` and `calculator_model` is blank, DeepConf uses `deepconf/models/G_NequIP.pth` automatically and applies identity species mapping for the bundled model. To use another bundled model, set `nequip_model_file` and `calculator_model`, for example:
 
 ```bash
 nequip_model_file="M_NequIP_smdW.pth"
 calculator_model="$model_dir/$nequip_model_file"
 ```
 
-The `all_NNP_MODELS/yml_file/` folder contains reference environment YAML files for the model-generation environments. They are included for provenance and troubleshooting, not required for normal DeepConf runs.
+The `deepconf/models/yml_file/` folder contains reference environment YAML files for the model-generation environments. They are included for provenance and troubleshooting, not required for normal DeepConf runs.
 
 ### Optimization Settings
 
