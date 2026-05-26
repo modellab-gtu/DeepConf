@@ -562,6 +562,17 @@ python scripts/run_deepconf_test_matrix.py \
 
 Results are written as `test_matrix_report.md` and `test_matrix_report.json` in the output root.
 
+### Performance notes
+
+Actual wall times depend heavily on hardware; the guidance below reflects relative cost rather than absolute seconds.
+
+- **Routes 1–3** involve no NNP optimization and complete in a few seconds per molecule regardless of calculator. They are suitable for smoke-testing a new environment on CPU.
+- **Routes 4–7** invoke the NNP or g16 calculator for conformer optimization. On CPU these take tens of seconds per molecule for rigid molecules and up to a few minutes for flexible ones (many conformers × optimization iterations). On GPU (AIMNet2, NequIP) the same routes typically finish 5–15× faster.
+- **Routes 8–9** add an internal ASE Langevin MD run before conformer optimization. At the default 1 000-step / 1 fs setting, expect roughly 1–2 min per molecule on GPU and significantly longer on CPU — **use GPU for NequIP and AIMNet2 in production MD routes**.
+- **ANI2x** is the fastest calculator on CPU (no GPU required for typical ligand sizes); AIMNet2 and NequIP benefit most from CUDA.
+- **Gaussian (g16)** runtime scales with basis set and molecule size. HF/3-21G with 64 processors is practical for validation; production runs should use a larger basis (e.g. 6-31G*) and budget several minutes per optimization.
+- The `--md-steps` default in the test matrix (1 000) is intentionally short. For production conformer diversity, 10 000–50 000 steps is more appropriate but multiplies MD time proportionally.
+
 ### Validated results
 
 | Calculator | Routes | Cases | Result |
