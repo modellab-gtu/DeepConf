@@ -582,12 +582,14 @@ if __name__ == "__main__":
     g16_level = args.g16_level
     g16_basis = args.g16_basis
     sample_md = getBoolStr(args.sample_md)
+    run_md = getBoolStr(args.run_md)
     external_md_traj_file = ""
-    if sample_md:
+    if sample_md and not run_md:
+        # run_md generates its own trajectory, so the external file is only
+        # required when sample_md is used without run_md.
         external_md_traj_file = _resolve_external_md_traj_file(
             args.external_md_traj_file
         )
-    run_md = getBoolStr(args.run_md)
     md_temperature = args.md_temperature
     md_steps = args.md_steps
     md_timestep_fs = args.md_timestep_fs
