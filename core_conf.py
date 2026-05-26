@@ -428,6 +428,45 @@ class confGen:
 
         return cluster_conf_id
 
+    def _getTorsionAnglesForConformers(self, mol, conformerIds):
+        from rdkit.Chem import TorsionFingerprints, rdMolTransforms
+        torsion_atoms = []
+        for torsions_list in TorsionFingerprints.CalculateTorsionLists(mol):
+            for torsions in torsions_list:
+                if 180 in torsions:
+                    torsion_atoms.append(torsions[0][0])  # (i, j, k, l)
+
+        n_t = len(torsion_atoms)
+        if n_t == 0:
+            return np.zeros((len(conformerIds), 0), dtype=np.float32)
+
+        features = np.empty((len(conformerIds), 2 * n_t), dtype=np.float32)
+        for ci, cid in enumerate(conformerIds):
+            conf = mol.GetConformer(cid)
+            for ti, (i, j, k, l) in enumerate(torsion_atoms):
+                angle_rad = np.deg2rad(rdMolTransforms.GetDihedralDeg(conf, i, j, k, l))
+                features[ci, 2 * ti]     = np.sin(angle_rad)
+                features[ci, 2 * ti + 1] = np.cos(angle_rad)
+        return features
+
+    def _getClusterKmeansFromTorsions(self, mol, conformerIds, n_group):
+        from sklearn.cluster import KMeans
+        cluster_conf_id = defaultdict(list)
+        n_group = min(int(n_group), len(conformerIds))
+        if n_group <= 1:
+            cluster_conf_id[0] = list(conformerIds)
+            return cluster_conf_id
+
+        features = self._getTorsionAnglesForConformers(mol, conformerIds)
+        if features.shape[1] == 0:
+            cluster_conf_id[0] = list(conformerIds)
+            return cluster_conf_id
+
+        labels = KMeans(n_clusters=n_group, n_init=10, random_state=42).fit_predict(features)
+        for label, cid in zip(labels, conformerIds):
+            cluster_conf_id[int(label)].append(cid)
+        return cluster_conf_id
+
     def _addConformerFromPositions(self, mol, positions):
         n_atoms = mol.GetNumAtoms()
         if len(positions) != n_atoms:
@@ -832,16 +871,9 @@ class confGen:
 
         print("Number of generated conformation: %d" %len(conformerIds))
 
-        #  for k-means clutering
-        #  dist_matrix = self._getConfDistMatrix(mol, conformerIds)
-        print("Obtaining pairwise distance distribution matrix")
-        dist_matrix = getDistMatrix([mol], conformerIds)
-
-        print("Processing k-means clustering")
+        print("Processing torsion-angle k-means clustering")
         n_group = min(self._getNumConfs(nfold, scaled=1), len(conformerIds))
-        cluster_conf_id = self._getClusterKmeansFromConfIds(conformerIds, dist_matrix,
-                                           n_group=n_group
-                                          )
+        cluster_conf_id = self._getClusterKmeansFromTorsions(mol, conformerIds, n_group=n_group)
         print("Calculating SP energies")
         minEConformerIDs = []
         all_picked_confs = []
