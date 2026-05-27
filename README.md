@@ -43,7 +43,7 @@ Repository: [modellab-gtu/DeepConf](https://github.com/modellab-gtu/DeepConf)
 Install the core scientific Python dependencies:
 
 ```bash
-conda install -c conda-forge numpy pandas tqdm rdkit openbabel ase pytorch torchani dftd3-python auto3d
+conda install -c conda-forge numpy pandas tqdm rdkit openbabel ase scikit-learn pytorch torchani dftd3-python auto3d
 conda install -c psi4 dftd3
 ```
 
@@ -103,7 +103,7 @@ conda activate ANI_AIMNet_NeQuIP
 Install non-PyTorch dependencies via conda. **Do not** install `pytorch`, `torchani`, or `auto3d` through conda — conda-forge pulls in its own `libtorch` shared libraries that will conflict with the pip-installed PyTorch below:
 
 ```bash
-conda install -y -c conda-forge numpy pandas tqdm rdkit openbabel ase dftd3-python
+conda install -y -c conda-forge numpy pandas tqdm rdkit openbabel ase scikit-learn dftd3-python
 conda install -y -c psi4 dftd3
 ```
 
@@ -148,7 +148,7 @@ conda activate ANI_AIMNet_NeQuIP
 Install non-PyTorch dependencies via conda. As with the CPU path, do not install `pytorch`, `torchani`, or `auto3d` through conda:
 
 ```bash
-conda install -y -c conda-forge numpy pandas tqdm rdkit openbabel ase dftd3-python
+conda install -y -c conda-forge numpy pandas tqdm rdkit openbabel ase scikit-learn dftd3-python
 conda install -y -c psi4 dftd3
 ```
 
@@ -198,7 +198,7 @@ Create a fresh DeepConf environment and install the core dependencies:
 ```bash
 conda create -y --name ANI_AIMNet_NeQuIP python=3.11
 conda activate ANI_AIMNet_NeQuIP
-conda install -y -c conda-forge numpy pandas tqdm rdkit openbabel ase pytorch torchani dftd3-python auto3d
+conda install -y -c conda-forge numpy pandas tqdm rdkit openbabel ase scikit-learn pytorch torchani dftd3-python auto3d
 ```
 
 The additional `psi4` `dftd3` package is optional for the ANI/AIMNet2/NequIP workflows:
