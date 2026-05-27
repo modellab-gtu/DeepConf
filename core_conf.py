@@ -58,13 +58,6 @@ def _calcRMSDsymm_global(pair_idx):
     return calcRMSDsymm(pair_idx, _rmsd_mol_ref)
 
 
-# Module-level ref set before Pool fork so workers inherit via COW — no per-task pickling.
-_rmsd_mol_ref = None
-
-def _calcRMSDsymm_global(pair_idx):
-    return calcRMSDsymm(pair_idx, _rmsd_mol_ref)
-
-
 def calcRMSDsymm(pair_idx, mol_list):
 
     idx1 = pair_idx[0]
