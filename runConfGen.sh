@@ -7,7 +7,7 @@ ligPrep_DIR="$HOME/DeepConf"
 PYTHON_DIR="$HOME/.local/Miniconda3/envs/ANI_AIMNet_NeQuIP/bin"
 
 # ── Input ─────────────────────────────────────────────────────────────────────
-struct_dir="./tmp_1"
+struct_dir="./structures"
 add_hydrogen=no
 
 # ── Calculator ────────────────────────────────────────────────────────────────
