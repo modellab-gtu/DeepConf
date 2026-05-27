@@ -214,7 +214,7 @@ class confGen:
         return self
 
     def _optimizer_logfile(self):
-        return '-' if getattr(self, "verbose", True) else None
+        return None
 
     def optimizeAddedHydrogensWithCurrentCalculator(self, fmax=0.05, maxiter=200, opt_method="LBFGS"):
         if not self.addH:
@@ -885,12 +885,19 @@ class confGen:
         # Pre-compute all SP energies in GPU batches when a GPU calculator is active.
         _sp_energy_cache = None
         gpu_batch_size = 256
-        if not mmCalculator and (self._is_aimnet2_calculator() or self._is_nequip_calculator()):
+        _nequip_gpu = self._is_nequip_calculator() and str(self.calculator.device).startswith("cuda")
+        if self._is_aimnet2_calculator():
+            _device_label = "GPU" if str(self.calculator.base_calc.device).startswith("cuda") else "CPU"
+        elif _nequip_gpu:
+            _device_label = "GPU"
+        else:
+            _device_label = "CPU"
+        if not mmCalculator and (self._is_aimnet2_calculator() or _nequip_gpu):
             from tqdm import tqdm
             gpu_batch_size = self._auto_gpu_batch_size(mol)
             all_conf_ids_flat = [cid for cids in cluster_conf_id.values() for cid in cids]
             n_batches = (len(all_conf_ids_flat) + gpu_batch_size - 1) // gpu_batch_size
-            print(f"Batched GPU SP: {len(all_conf_ids_flat)} conformers ({n_batches} GPU batches)")
+            print(f"Batched {_device_label} SP: {len(all_conf_ids_flat)} conformers ({n_batches} batches)")
             _sp_batch = []
             with tqdm(total=len(all_conf_ids_flat), desc="SP energies", unit="conf") as pbar:
                 for start in range(0, len(all_conf_ids_flat), gpu_batch_size):
@@ -981,20 +988,20 @@ class confGen:
         conf_ids_list = list(all_picked_confs)
         if self._is_aimnet2_calculator():
             if optimization_conf:
-                print(f"Batched GPU FIRE optimization: {len(conf_ids_list)} conformers")
+                print(f"Batched {_device_label} FIRE optimization: {len(conf_ids_list)} conformers")
                 conf_results = self._geomOptimizationBatchedAIMNet2(mol, conf_ids_list,
                                                                      gpu_batch_size=gpu_batch_size)
             else:
-                print(f"Batched GPU SP energies: {len(conf_ids_list)} picked conformers")
+                print(f"Batched {_device_label} SP energies: {len(conf_ids_list)} picked conformers")
                 conf_results = self._calcSPEnergyBatchedAIMNet2(mol, conf_ids_list,
                                                                  gpu_batch_size=gpu_batch_size)
-        elif self._is_nequip_calculator():
+        elif _nequip_gpu:
             if optimization_conf:
-                print(f"Batched GPU FIRE optimization (NequIP): {len(conf_ids_list)} conformers")
+                print(f"Batched {_device_label} FIRE optimization (NequIP): {len(conf_ids_list)} conformers")
                 conf_results = self._geomOptimizationBatchedNequIP(mol, conf_ids_list,
                                                                     gpu_batch_size=gpu_batch_size)
             else:
-                print(f"Batched GPU SP energies (NequIP): {len(conf_ids_list)} picked conformers")
+                print(f"Batched {_device_label} SP energies (NequIP): {len(conf_ids_list)} picked conformers")
                 conf_results = self._calcSPEnergyBatchedNequIP(mol, conf_ids_list,
                                                                 gpu_batch_size=gpu_batch_size)
         else:
@@ -1108,9 +1115,12 @@ class confGen:
         import torchani
         import torch
         self.nequip_cohesive_energy = False
-        if getattr(self, "verbose", True):
-            print("Number of CUDA devices: ", torch.cuda.device_count())
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        if getattr(self, "verbose", True):
+            if torch.cuda.is_available():
+                print("Number of CUDA devices: ", torch.cuda.device_count())
+            else:
+                print("No CUDA devices found, using CPU")
 
         model_key = model_name.lower().replace("-", "").replace("_", "")
         model_factories = {
@@ -1602,7 +1612,9 @@ class confGen:
         for i, conf_id in enumerate(conformer_ids):
             positions[i] = mol.GetConformer(conf_id).GetPositions()
 
-        print(f"Batched GPU FIRE: {B} conformers, sub-batch={gpu_batch_size}, "
+        _dev = self.calculator.base_calc.device
+        _dlabel = "GPU" if str(_dev).startswith("cuda") else "CPU"
+        print(f"Batched {_dlabel} FIRE: {B} conformers, sub-batch={gpu_batch_size}, "
               f"fmax={self.fmax}, maxiter={self.maxiter}")
 
         def eval_fn(pos_active):
