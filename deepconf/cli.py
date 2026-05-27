@@ -24,7 +24,7 @@ parser.add_argument("optimization_conf", nargs="?", default="No") # args for boo
 parser.add_argument("optimization_lig", nargs="?", default="No") # args for bool
 parser.add_argument("pre_optimization_lig", nargs="?", default="No") # args for bool
 parser.add_argument("genconformer", nargs="?", default="No") # args for bool
-parser.add_argument("nprocs", type=int, default=nprocs_all)
+parser.add_argument("g16_nprocs", type=int, default=nprocs_all)
 parser.add_argument("thr_fmax", type=float, default=0.05)
 parser.add_argument("maxiter", type=int, default=500)
 
@@ -346,7 +346,7 @@ def setG16calculator(lig, file_base, label, WORK_DIR, charge=0, mult=1,
     lig.setG16Calculator(
             label="%s/g16_%s/%s"%(WORK_DIR, label, file_base),
             chk="",
-            nprocs=nprocs,
+            nprocs=g16_nprocs,
             xc=level,
             basis=basis,
             scf="XQC, maxconventionalcycles=100",
@@ -499,7 +499,7 @@ def runConfGen(file_name):
             )
 
     # set optimizetion parameters
-    lig.setOptParams(fmax=thr_fmax, maxiter=args.maxiter)
+    lig.setOptParams(fmax=thr_fmax, maxiter=maxiter)
 
     if pre_optimization_lig:
         print("Pre-Optimization process.. before confromer generations")
@@ -546,7 +546,7 @@ def main():
     global args
     global verbose, structure_dir, calculator_type, optimization_method
     global optimization_conf, optimization_lig, pre_optimization_lig, genconformer
-    global ignore_hydrogen, ETKDG, nprocs, thr_fmax
+    global ignore_hydrogen, ETKDG, g16_nprocs, thr_fmax, maxiter
     global num_conformers, max_attempts, prune_rms_thresh
     global opt_prune_rms_thresh, opt_prune_diffE_thresh
     global nfold, npick, nscale
@@ -572,8 +572,9 @@ def main():
     ignore_hydrogen = getBoolStr(args.ignore_hydrogen)
     ETKDG = getBoolStr(args.ETKDG)
 
-    nprocs = args.nprocs
+    g16_nprocs = args.g16_nprocs
     thr_fmax = args.thr_fmax
+    maxiter = args.maxiter
 
     #get conformer generator parameters
     num_conformers = args.num_conformers
@@ -628,26 +629,11 @@ def main():
     if run_md:
         md_basename = os.path.basename(md_traj_file)
         file_names = [item for item in file_names if item != md_basename]
-    failed_csv = open("failed_files.csv", "w")
-    failed_csv.write("FileNames,\n")
-
-    fl_timing = open("timings.csv", "w")
-    print("FileName,Time(min.)", file=fl_timing)
     for file_name in file_names:
         file_base = file_name.split(".")[0]
-        #  try:
-        s_time = time.time()
         result = runConfGen(file_name)
         if result is None:
             continue
-
-        print(file_name, ",", "%.4f"%((time.time()-s_time)/60), file=fl_timing)
-        #  except:
-        #      print("Error for %s file !!! Skipping...")
-        #      failed_csv.write(file_name+",\n")
-        #  break
-    fl_timing.close()
-    failed_csv.close()
 
 
 if __name__ == "__main__":
