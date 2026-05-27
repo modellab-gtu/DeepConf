@@ -8,5 +8,10 @@ timings.csv
 failed_files.csv
 test_matrix_runs/
 
+# pip/setuptools build artifacts
+*.egg-info/
+dist/
+build/
+
 # Local test/scratch directories
 foldedtest/
