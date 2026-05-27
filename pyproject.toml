@@ -13,6 +13,7 @@ dependencies = [
     "numpy",
     "rdkit",
     "ase",
+    "scikit-learn",
 ]
 
 [project.optional-dependencies]
