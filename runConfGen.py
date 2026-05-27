@@ -25,7 +25,7 @@ parser.add_argument("optimization_conf", nargs="?", default="No") # args for boo
 parser.add_argument("optimization_lig", nargs="?", default="No") # args for bool
 parser.add_argument("pre_optimization_lig", nargs="?", default="No") # args for bool
 parser.add_argument("genconformer", nargs="?", default="No") # args for bool
-parser.add_argument("nprocs", type=int, default=nprocs_all)
+parser.add_argument("g16_nprocs", type=int, default=nprocs_all)
 parser.add_argument("thr_fmax", type=float, default=0.05)
 parser.add_argument("maxiter", type=int, default=500)
 
@@ -342,7 +342,7 @@ def setG16calculator(lig, file_base, label, WORK_DIR, charge=0, mult=1,
     lig.setG16Calculator(
             label="%s/g16_%s/%s"%(WORK_DIR, label, file_base),
             chk="",
-            nprocs=nprocs,
+            g16_nprocs=g16_nprocs,
             xc=level,
             basis=basis,
             scf="XQC, maxconventionalcycles=100",
@@ -552,7 +552,7 @@ if __name__ == "__main__":
     ignore_hydrogen = getBoolStr(args.ignore_hydrogen)
     ETKDG = getBoolStr(args.ETKDG)
 
-    nprocs = args.nprocs
+    g16_nprocs = args.g16_nprocs
     thr_fmax = args.thr_fmax
     maxiter = args.maxiter
 
@@ -609,24 +609,9 @@ if __name__ == "__main__":
     if run_md:
         md_basename = os.path.basename(md_traj_file)
         file_names = [item for item in file_names if item != md_basename]
-    failed_csv = open("failed_files.csv", "w")
-    failed_csv.write("FileNames,\n")
-
-    fl_timing = open("timings.csv", "w")
-    print("FileName,Time(min.)", file=fl_timing)
     for file_name in file_names:
         file_base = file_name.split(".")[0]
-        #  try:
-        s_time = time.time()
         result = runConfGen(file_name)
         if result is None:
             continue
-
-        print(file_name, ",", "%.4f"%((time.time()-s_time)/60), file=fl_timing)
-        #  except:
-        #      print("Error for %s file !!! Skipping...")
-        #      failed_csv.write(file_name+",\n")
-        #  break
-    fl_timing.close()
-    failed_csv.close()
 
