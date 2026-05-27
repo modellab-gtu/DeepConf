@@ -16,7 +16,7 @@ nprocs_all = int(multiprocessing.cpu_count())
 
 
 parser = argparse.ArgumentParser(description="Give something ...")
-parser.add_argument("structure_dir", type=str)
+parser.add_argument("structure_dir", nargs="?", default="./structures")
 parser.add_argument("ignore_hydrogen", nargs="?", default="No") # args for bool
 parser.add_argument("calculator_type", type=str)
 parser.add_argument("optimization_method", nargs="?", default="No") # args for bool
