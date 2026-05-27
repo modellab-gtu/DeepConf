@@ -275,7 +275,7 @@ bash runConfGen.sh
 
 | Option | Current default | Description |
 | --- | --- | --- |
-| `ligPrep_DIR` | `$HOME/DeepConf` | Absolute path to the DeepConf repository. The script runs `$ligPrep_DIR/runConfGen.py` and uses `$ligPrep_DIR/deepconf/models` for bundled NequIP models. |
+| `ligPrep_DIR` | `$HOME/DeepConf` | Absolute path to the DeepConf repository. The script runs `$ligPrep_DIR/runConfGen.py` and uses `$ligPrep_DIR/all_NNP_MODELS` for bundled NequIP models. |
 | `PYTHON_DIR` | `$HOME/.local/Miniconda3/envs/ANI_AIMNet_NeQuIP/bin` | Directory containing the Python executable for the DeepConf environment. The script runs `$PYTHON_DIR/python`. |
 | `struct_dir` | `./structures` | Directory containing input ligand files. Each file in this folder is processed. Hidden files are ignored. |
 | `verbose` | `yes` | `yes` keeps all folders and intermediate files. `no` copies the final SDF to the run directory as `<file_base>_output.sdf` and removes each ligand work folder. |
@@ -309,8 +309,8 @@ Common workflows:
 
 | Option | Current default | Description |
 | --- | --- | --- |
-| `caculator_type` | `aimnet2` | Calculator choice. The variable name is intentionally kept as `caculator_type` for backward compatibility. Supported values include `ani1x`, `ani1ccx`, `ani2x`, `aimnet2`, `nequip`, `g16`, and `uff`. |
-| `calculator_model` | blank | Optional model name or model path. For AIMNet2, leave blank to use `aimnet2` or set a specific AIMNet model name. For NequIP, leave blank to use the bundled `deepconf/models/G_NequIP.pth`, or set this to a deployed `.pth` model path or a newer compiled model path. |
+| `caculator_type` | `nequip` | Calculator choice. The variable name is intentionally kept as `caculator_type` for backward compatibility. Supported values include `ani1x`, `ani1ccx`, `ani2x`, `aimnet2`, `nequip`, `g16`, and `uff`. |
+| `calculator_model` | blank | Optional model name or model path. For AIMNet2, leave blank to use `aimnet2` or set a specific AIMNet model name. For NequIP, leave blank to use the bundled `all_NNP_MODELS/G_NequIP.pth`, or set this to a deployed `.pth` model path or a newer compiled model path. |
 | `calculator_charge` | blank | AIMNet2 and Gaussian16 total molecular charge. Leave blank to infer the formal charge from the loaded SDF/RDKit molecule. Set an integer such as `-1`, `0`, or `1` to override. |
 | `calculator_multiplicity` | `1` | AIMNet2 and Gaussian16 spin multiplicity. |
 | `calculator_device` | `auto` | Device for NequIP. `auto` selects CUDA when PyTorch sees a GPU, otherwise CPU. You can force `cpu` or `cuda`. |
@@ -318,14 +318,14 @@ Common workflows:
 | `g16_mem` | `4GB` | Gaussian16 memory setting passed to ASE Gaussian as `mem`. |
 | `g16_level` | `WB97XD` | Gaussian16 functional/method setting passed to ASE Gaussian as `xc`. |
 | `g16_basis` | `6-311++G(3df,3pd)` | Gaussian16 basis-set setting passed to ASE Gaussian as `basis`. |
-| `nprocs` | `64` | Number of processors for Gaussian jobs. It does not make ANI, AIMNet2, or NequIP single-structure optimization run on 64 CPU cores. Use GPU testing for ML-calculator speed evaluation. |
+| `g16_nprocs` | `64` | Number of processors for Gaussian jobs. It does not make ANI, AIMNet2, or NequIP single-structure optimization run on 64 CPU cores. Use GPU testing for ML-calculator speed evaluation. |
 
 Calculator notes:
 
 - ANI-family choices use TorchANI: `ani1x`, `ani1ccx`, or `ani2x`.
 - AIMNet2 uses the AIMNet ASE calculator. Charge is inferred from formal charges in the SDF unless `calculator_charge` or `DEEPCONF_AIMNET_CHARGE` is set.
 - NequIP uses the ASE `NequIPCalculator`. Older `.pth` or `.pt` models are loaded through the deployed-model path. Raw NequIP cohesive energies are converted back to total eV energies before writing SDF/CSV `Energy` values.
-- `g16` uses Gaussian16 through ASE and uses `nprocs` for `nprocshared`. Charge is inferred from formal charges in the SDF unless `calculator_charge` or `DEEPCONF_G16_CHARGE` is set, `calculator_multiplicity` is passed as the Gaussian multiplicity, and `g16_mem`, `g16_level`, and `g16_basis` control the Gaussian memory, method, and basis settings.
+- `g16` uses Gaussian16 through ASE and uses `g16_nprocs` for `nprocshared`. Charge is inferred from formal charges in the SDF unless `calculator_charge` or `DEEPCONF_G16_CHARGE` is set, `calculator_multiplicity` is passed as the Gaussian multiplicity, and `g16_mem`, `g16_level`, and `g16_basis` control the Gaussian memory, method, and basis settings.
 - `uff` is only for RDKit/MM energy handling in supported paths. Do not use `uff` with `optimization_conf=yes`.
 
 ### Bundled NequIP Models
@@ -333,13 +333,13 @@ Calculator notes:
 The repository includes in-house NequIP model files under:
 
 ```bash
-deepconf/models/
+all_NNP_MODELS/
 ```
 
 `runConfGen.sh` defines:
 
 ```bash
-model_dir="$ligPrep_DIR/deepconf/models"
+model_dir="$ligPrep_DIR/all_NNP_MODELS"
 nequip_model_file="G_NequIP.pth"
 ```
 
@@ -360,14 +360,14 @@ caculator_type="nequip"
 calculator_device=auto
 ```
 
-When `caculator_type="nequip"` and `calculator_model` is blank, DeepConf uses `deepconf/models/G_NequIP.pth` automatically and applies identity species mapping for the bundled model. To use another bundled model, set `nequip_model_file` and `calculator_model`, for example:
+When `caculator_type="nequip"` and `calculator_model` is blank, DeepConf uses `all_NNP_MODELS/G_NequIP.pth` automatically and applies identity species mapping for the bundled model. To use another bundled model, set `nequip_model_file` and `calculator_model`, for example:
 
 ```bash
 nequip_model_file="M_NequIP_smdW.pth"
 calculator_model="$model_dir/$nequip_model_file"
 ```
 
-The `deepconf/models/yml_file/` folder contains reference environment YAML files for the model-generation environments. They are included for provenance and troubleshooting, not required for normal DeepConf runs.
+The `all_NNP_MODELS/yml_file/` folder contains reference environment YAML files for the model-generation environments. They are included for provenance and troubleshooting, not required for normal DeepConf runs.
 
 ### Optimization Settings
 
@@ -494,13 +494,6 @@ For ligand-only optimization, outputs are written as:
 <file_base>/
   global_<prefix><file_base>.sdf
   global_<prefix><file_base>_energy.txt
-```
-
-Timing and failure logs are written in the run directory:
-
-```text
-timings.csv
-failed_files.csv
 ```
 
 ## Testing
