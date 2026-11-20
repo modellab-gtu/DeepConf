@@ -93,6 +93,27 @@ def _value_or_env(value, env_name, default=""):
     return value
 
 
+def _external_model_kind(calculator_key):
+    """Model kind served by ext_worker.py for this calculator_type, or None.
+
+    calculator_key is calculator_type in lower case without "-" and "_".
+    UMA and MACE-OMol always run in the worker. AIMNet2-2025 runs in the worker when a separate
+    environment is configured for it (DEEPCONF_AIMNET2025_PYTHON or DEEPCONF_AIMNET2025_SETUP);
+    otherwise it is loaded in-process like any other AIMNet2 model (needs a recent aimnet package).
+    The ext_* names are the ones used in the G-NequIP manuscript reruns.
+    """
+    if calculator_key in ("uma", "extuma"):
+        return "uma"
+    if calculator_key in ("mace", "maceomol", "extmace"):
+        return "mace"
+    if calculator_key == "extaimnet25":
+        return "aimnet"
+    if calculator_key in ("aimnet22025", "aimnet2025") and (
+            os.environ.get("DEEPCONF_AIMNET2025_PYTHON") or os.environ.get("DEEPCONF_AIMNET2025_SETUP")):
+        return "aimnet"
+    return None
+
+
 def _parse_nequip_chemical_symbols(value):
     value = _value_or_env(value, "DEEPCONF_NEQUIP_CHEMICAL_SYMBOLS", "")
     value = str(value).strip()
@@ -432,6 +453,21 @@ def runConfGen(file_name):
     calculator_key = calculator_type.lower().replace("-", "").replace("_", "")
     if calculator_key in ("ani1x", "ani1ccx", "ani2x"):
         lig.setANICalculator(calculator_key)
+    elif _external_model_kind(calculator_key) is not None:
+        kind = _external_model_kind(calculator_key)
+        prefix = "DEEPCONF_" + confGen.EXTERNAL_MODEL_ENV[kind]
+        lig.setExternalCalculator(
+            kind,
+            model=_value_or_env(calculator_model, prefix + "_MODEL", ""),
+            charge=_parse_calculator_charge(
+                calculator_charge,
+                lig,
+                calculator_label=calculator_type,
+                env_name=prefix + "_CHARGE",
+            ),
+            mult=calculator_mult,
+            device=calculator_device,
+        )
     elif "g16" in calculator_type.lower():
         lig = setG16calculator(
             lig,

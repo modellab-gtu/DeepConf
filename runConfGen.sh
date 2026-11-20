@@ -12,9 +12,11 @@ add_hydrogen=no
 
 # ── Calculator ────────────────────────────────────────────────────────────────
 # Available: ani1x / ani1ccx / ani2x / aimnet2 / nequip / g16 / uff
+# From another Python environment (see "External models" in README.md): uma / mace / aimnet2-2025
 caculator_type="nequip"
 
-# AIMNet2: set calculator_model to aimnet2, aimnet2-2025, etc. (blank = default)
+# AIMNet2: set calculator_model to an AIMNet2 model name (blank = aimnet2)
+# UMA / MACE-OMol / AIMNet2-2025: calculator_model is a model name or file (blank = $DEEPCONF_<KIND>_MODEL, else package default)
 # NequIP:  set calculator_model to deployed .pth path (blank = bundled G_NequIP.pth)
 # G16:     calculator_charge and calculator_multiplicity are passed to Gaussian
 # Leave calculator_charge blank to infer from SDF formal charge, or set an override

@@ -880,7 +880,7 @@ class confGen:
         gpu_batch_size = 256
         _nequip_gpu = self._is_nequip_calculator() and str(self.calculator.device).startswith("cuda")
         if self._is_aimnet2_calculator():
-            _device_label = "GPU" if str(self.calculator.base_calc.device).startswith("cuda") else "CPU"
+            _device_label = self._aimnet2_device_label()
         elif _nequip_gpu:
             _device_label = "GPU"
         else:
@@ -1148,6 +1148,123 @@ class confGen:
 
         self.calculator = _ChargeKeepingAIMNet2ASE(model_name, charge=charge, mult=mult)
         assert float(self.calculator.charge) == float(charge), (self.calculator.charge, charge)
+
+    # Environment-variable prefix for each external model kind: DEEPCONF_<prefix>_PYTHON, _SETUP, _MODEL
+    EXTERNAL_MODEL_ENV = {"uma": "UMA", "mace": "MACE", "aimnet": "AIMNET2025"}
+
+    def setExternalCalculator(self, kind, model="", charge=0, mult=1, device="auto",
+                              python=None, setup=None, task="", dtype="", timeout=None):
+        """Use a model that lives in another Python environment: UMA, MACE-OMol or AIMNet2-2025.
+
+        ext_worker.py is started with that environment's interpreter, loads the model once and serves
+        batched energies and forces over a private unix socket. The calculator set here plugs into the
+        same batched FIRE path as AIMNet2 and also works as an ordinary ASE calculator.
+
+        kind    "uma", "mace" or "aimnet"
+        model   model name or file; blank = default of the model package
+        python  interpreter of the model environment (default: $DEEPCONF_<KIND>_PYTHON, else this interpreter)
+        setup   shell commands run before the worker starts, e.g. "module load ..." or "conda activate ..."
+                (default: $DEEPCONF_<KIND>_SETUP); with setup and no python, "python" from that shell is used
+        """
+        import atexit, secrets, shlex, subprocess, tempfile, time
+        import torch
+        from multiprocessing.connection import Client
+        from ase.calculators.calculator import Calculator, all_changes
+
+        if kind not in self.EXTERNAL_MODEL_ENV:
+            raise ValueError(f"unknown external model kind {kind!r}; expected one of {sorted(self.EXTERNAL_MODEL_ENV)}")
+        prefix = "DEEPCONF_" + self.EXTERNAL_MODEL_ENV[kind]
+        python = python or os.environ.get(prefix + "_PYTHON", "")
+        setup = setup or os.environ.get(prefix + "_SETUP", "")
+        task = task or os.environ.get(prefix + "_TASK", "")
+        dtype = dtype or os.environ.get(prefix + "_DTYPE", "")
+        timeout = float(timeout or os.environ.get("DEEPCONF_WORKER_TIMEOUT", 900))
+        self.nequip_cohesive_energy = False
+
+        # Private directory (mode 700) in the node-local temp dir: unix socket paths are limited to ~107 characters.
+        sock_dir = tempfile.mkdtemp(prefix="deepconf_")
+        addr = os.path.join(sock_dir, "worker.sock")
+        authkey = secrets.token_bytes(32)
+        worker = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ext_worker.py")
+        args = ["-u", worker, "--kind", kind, "--socket", addr, "--model", str(model or ""),
+                "--charge", str(int(charge)), "--mult", str(int(mult)), "--device", str(device or "auto"),
+                "--task", task, "--dtype", dtype]
+        if setup:
+            cmd = ["bash", "-lc", setup + "\nexec " + " ".join(shlex.quote(a) for a in [python or "python"] + args)]
+        else:
+            cmd = [python or sys.executable] + args
+        env = dict(os.environ, DEEPCONF_WORKER_AUTHKEY=authkey.hex())
+        proc = subprocess.Popen(cmd, env=env)
+
+        def _cleanup():
+            shutil.rmtree(sock_dir, ignore_errors=True)
+
+        t_end = time.time() + timeout
+        while not os.path.exists(addr):
+            if proc.poll() is not None:
+                _cleanup()
+                raise RuntimeError(
+                    f"The {kind} model worker stopped while starting (exit code {proc.returncode}); see its messages "
+                    f"above. Check {prefix}_PYTHON / {prefix}_SETUP / {prefix}_MODEL.")
+            if time.time() > t_end:
+                proc.kill()
+                _cleanup()
+                raise RuntimeError(f"The {kind} model worker was not ready after {timeout:.0f} s "
+                                   f"(DEEPCONF_WORKER_TIMEOUT).")
+            time.sleep(0.5)
+        conn = Client(addr, family="AF_UNIX", authkey=authkey)
+        _, worker_device = conn.recv()      # ("ready", device) sent by the worker
+
+        def _request(pos, numbers, forces):
+            conn.send(("eval", np.asarray(pos), np.asarray(numbers), bool(forces)))
+            reply = conn.recv()
+            if reply[0] != "ok":
+                raise RuntimeError(f"{kind} model worker: {reply[1]}")
+            return reply[1], reply[2]
+
+        class _ExternalBase:
+            # Same interface as the AIMNet2 base calculator. Tensors stay on the CPU on this side;
+            # the worker moves them to its own device.
+            device = "cpu"
+            worker_device = None
+
+            def eval(self, _in, forces=True):
+                energy, force = _request(_in["coord"].detach().cpu().numpy(),
+                                         _in["numbers"][0].detach().cpu().numpy(), forces)
+                out = {"energy": torch.tensor(energy)}
+                if forces:
+                    out["forces"] = torch.tensor(force)
+                return out
+
+        class ExternalModelCalculator(Calculator):
+            implemented_properties = ["energy", "forces"]
+            _deepconf_external = True
+
+            def calculate(self, atoms=None, properties=("energy",), system_changes=all_changes):
+                super().calculate(atoms, properties, system_changes)
+                energy, force = _request(self.atoms.get_positions()[None], self.atoms.get_atomic_numbers(), True)
+                self.results = {"energy": float(energy[0]), "forces": np.asarray(force[0])}
+
+        calc = ExternalModelCalculator()
+        calc.base_calc, calc.charge, calc.mult = _ExternalBase(), float(charge), float(mult)
+        calc.base_calc.worker_device = worker_device
+        calc.kind, calc.model = kind, model
+        self.calculator = calc
+
+        def _stop():
+            try:
+                conn.send(("stop",))
+                conn.close()
+            except Exception:
+                pass
+            try:
+                proc.wait(timeout=60)
+            except Exception:
+                proc.kill()
+            _cleanup()
+        atexit.register(_stop)
+        print(f"External calculator: {kind} model={model or '(default)'} on {worker_device}, "
+              f"charge={int(charge)} mult={int(mult)}", flush=True)
 
     def setNequIPCalculator(self, model_path, device="auto", chemical_symbols=None):
         import inspect
@@ -1447,6 +1564,9 @@ class confGen:
             return min_batch
 
     def _is_aimnet2_calculator(self):
+        # External models (setExternalCalculator) offer the same batched interface as AIMNet2.
+        if getattr(self.calculator, "_deepconf_external", False):
+            return True
         try:
             from aimnet.calculators import AIMNet2ASE
         except ImportError:
@@ -1455,6 +1575,12 @@ class confGen:
             except ImportError:
                 return False
         return isinstance(self.calculator, AIMNet2ASE)
+
+    def _aimnet2_device_label(self):
+        # For an external model, report the device of the worker, not of this process.
+        base_calc = self.calculator.base_calc
+        device = getattr(base_calc, "worker_device", None) or base_calc.device
+        return "GPU" if str(device).startswith("cuda") else "CPU"
 
     def _aimnet2_batch_eval(self, positions_np, atom_numbers, forces=True, gpu_batch_size=256):
         """Batched AIMNet2 forward pass over multiple conformer positions.
@@ -1619,8 +1745,7 @@ class confGen:
         for i, conf_id in enumerate(conformer_ids):
             positions[i] = mol.GetConformer(conf_id).GetPositions()
 
-        _dev = self.calculator.base_calc.device
-        _dlabel = "GPU" if str(_dev).startswith("cuda") else "CPU"
+        _dlabel = self._aimnet2_device_label()
         print(f"Batched {_dlabel} FIRE: {B} conformers, sub-batch={gpu_batch_size}, "
               f"fmax={self.fmax}, maxiter={self.maxiter}")
 

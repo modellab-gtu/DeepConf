@@ -309,7 +309,7 @@ Common workflows:
 
 | Option | Current default | Description |
 | --- | --- | --- |
-| `caculator_type` | `nequip` | Calculator choice. The variable name is intentionally kept as `caculator_type` for backward compatibility. Supported values include `ani1x`, `ani1ccx`, `ani2x`, `aimnet2`, `nequip`, `g16`, and `uff`. |
+| `caculator_type` | `nequip` | Calculator choice. The variable name is intentionally kept as `caculator_type` for backward compatibility. Supported values include `ani1x`, `ani1ccx`, `ani2x`, `aimnet2`, `nequip`, `g16`, and `uff`, plus `uma`, `mace` and `aimnet2-2025` through a separate environment (see External models below). |
 | `calculator_model` | blank | Optional model name or model path. For AIMNet2, leave blank to use `aimnet2` or set a specific AIMNet model name. For NequIP, leave blank to use the bundled `all_NNP_MODELS/G_NequIP.pth`, or set this to a deployed `.pth` model path or a newer compiled model path. |
 | `calculator_charge` | blank | AIMNet2 and Gaussian16 total molecular charge. Leave blank to infer the formal charge from the loaded SDF/RDKit molecule. Set an integer such as `-1`, `0`, or `1` to override. |
 | `calculator_multiplicity` | `1` | AIMNet2 and Gaussian16 spin multiplicity. |
@@ -327,6 +327,45 @@ Calculator notes:
 - NequIP uses the ASE `NequIPCalculator`. Older `.pth` or `.pt` models are loaded through the deployed-model path. Raw NequIP cohesive energies are converted back to total eV energies before writing SDF/CSV `Energy` values.
 - `g16` uses Gaussian16 through ASE and uses `g16_nprocs` for `nprocshared`. Charge is inferred from formal charges in the SDF unless `calculator_charge` or `DEEPCONF_G16_CHARGE` is set, `calculator_multiplicity` is passed as the Gaussian multiplicity, and `g16_mem`, `g16_level`, and `g16_basis` control the Gaussian memory, method, and basis settings.
 - `uff` is only for RDKit/MM energy handling in supported paths. Do not use `uff` with `optimization_conf=yes`.
+- `uma`, `mace` and `aimnet2-2025` run in a separate Python environment; see [External models](#external-models-uma-mace-omol-aimnet2-2025).
+
+### External models: UMA, MACE-OMol, AIMNet2-2025
+
+These models need newer PyTorch builds than the combined ANI/AIMNet2/NequIP environment, so DeepConf does not import them. It starts `ext_worker.py` with the Python interpreter of the environment that holds the model. The worker loads the model once and returns batched energies and forces, and DeepConf's own batched FIRE optimizer drives it in the same way as AIMNet2. The worker environment needs only `numpy`, `torch`, `ase` and the model package (`fairchem-core`, `mace-torch` or `aimnet`); DeepConf need not be installed there.
+
+| `caculator_type` | Model | Package in the worker environment | Default model |
+| --- | --- | --- | --- |
+| `uma` | UMA (task `omol`) | `fairchem-core` | `uma-s-1p2` |
+| `mace` (or `mace-omol`) | MACE-OMol | `mace-torch` | default of `mace_omol()` |
+| `aimnet2-2025` | AIMNet2-2025 | `aimnet` (recent version) | `aimnet2-2025` |
+
+Settings are environment variables, where `<KIND>` is `UMA`, `MACE` or `AIMNET2025`:
+
+| Variable | Meaning |
+| --- | --- |
+| `DEEPCONF_<KIND>_PYTHON` | Python interpreter of the model environment. Without it (and without `_SETUP`) the DeepConf interpreter is used. |
+| `DEEPCONF_<KIND>_SETUP` | Shell commands run before the worker starts, for example `conda activate uma` or `module load ...`. With `_SETUP` and no `_PYTHON`, the `python` found after these commands is used. |
+| `DEEPCONF_<KIND>_MODEL` | Model name or model file. `calculator_model` in `runConfGen.sh` takes precedence. |
+| `DEEPCONF_<KIND>_CHARGE` | Total charge when `calculator_charge` is blank; otherwise the formal charge of the SDF is used. |
+| `DEEPCONF_UMA_TASK` | UMA task name (default `omol`). |
+| `DEEPCONF_MACE_DTYPE` | MACE default dtype (default `float64`). |
+| `DEEPCONF_WORKER_TIMEOUT` | Seconds to wait for the model to load (default 900). |
+
+Example:
+
+```bash
+export DEEPCONF_UMA_PYTHON=$HOME/miniconda3/envs/uma/bin/python
+export DEEPCONF_UMA_MODEL=/path/to/uma-s-1p2.pt      # or a model name such as uma-s-1p2
+# in runConfGen.sh: caculator_type="uma"
+```
+
+Notes:
+
+- The total charge and the multiplicity are passed to all three models (`calculator_charge`, `calculator_multiplicity`).
+- `calculator_device` (`auto`, `cuda`, `cpu`) selects the device of the worker.
+- UMA and MACE-OMol are evaluated one structure at a time inside the worker; AIMNet2-2025 is evaluated in batches.
+- `aimnet2-2025` uses the worker only when `DEEPCONF_AIMNET2025_PYTHON` or `DEEPCONF_AIMNET2025_SETUP` is set. Otherwise it is loaded in-process like any AIMNet2 model, which needs an `aimnet` version that provides this model (the pinned `aimnet==0.0.1` does not).
+- `ext_uma`, `ext_mace` and `ext_aimnet25` are accepted as calculator names for compatibility with the runs of the G-NequIP manuscript.
 
 ### Bundled NequIP Models
 
