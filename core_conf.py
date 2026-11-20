@@ -1133,7 +1133,21 @@ class confGen:
         except ImportError:
             from aimnet.calculators.aimnet2ase import AIMNet2ASE
 
-        self.calculator = AIMNet2ASE(model_name, charge=charge, mult=mult)
+        # AIMNet2ASE.__init__ and set_atoms() call reset(), which sets charge=0 and mult=1, so the requested total
+        # charge was lost and every ion was computed as a neutral molecule. This subclass restores the requested
+        # charge and multiplicity after every reset().
+        class _ChargeKeepingAIMNet2ASE(AIMNet2ASE):
+            def __init__(self, base_calc, charge=0, mult=1):
+                self._keep_charge, self._keep_mult = float(charge), float(mult)
+                super().__init__(base_calc, charge=charge, mult=mult)
+
+            def reset(self):
+                super().reset()
+                if hasattr(self, "_keep_charge"):
+                    self.charge, self.mult = self._keep_charge, self._keep_mult
+
+        self.calculator = _ChargeKeepingAIMNet2ASE(model_name, charge=charge, mult=mult)
+        assert float(self.calculator.charge) == float(charge), (self.calculator.charge, charge)
 
     def setNequIPCalculator(self, model_path, device="auto", chemical_symbols=None):
         import inspect
